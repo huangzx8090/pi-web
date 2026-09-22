@@ -1,45 +1,69 @@
-# Pi Web · 个人改进版（类 Codex）
+<div align="center">
+  <img src="./docs/banner.svg" alt="pi-web · Codex-style" width="100%" />
+  <h1>pi-web · Codex-style</h1>
+  <p><b>A cleaner, project-first UI for the <a href="https://github.com/earendil-works/pi">pi coding agent</a>.</b><br/>
+  Click a folder, create a project, start chatting — without the sidebar clutter.</p>
 
-> 这是基于 [agegr/pi-web](https://github.com/agegr/pi-web) 的 **个人 fork / 改进版**，目标是把 Pi Web 的使用体验做得更接近 **Codex**：侧边栏更清爽、以项目为中心、对话标题自动生成。
-> **不是官方仓库**，也不发布到 npm；官方版本请看上游 [agegr/pi-web](https://github.com/agegr/pi-web)。
+  <p>
+    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT" />
+    <img src="https://img.shields.io/badge/node-%E2%89%A522.19.0-brightgreen.svg" alt="Node >= 22.19.0" />
+    <img src="https://img.shields.io/badge/UI-English%20%7C%20%E4%B8%AD%E6%96%87-blueviolet.svg" alt="i18n" />
+    <a href="https://github.com/huangzx8090/pi-web/stargazers"><img src="https://img.shields.io/github/stars/huangzx8090/pi-web?style=social" alt="Stars" /></a>
+  </p>
+  <p><a href="./README.md">English</a> · <a href="./README.zh-CN.md">简体中文</a></p>
+</div>
 
-Pi Web 是 [pi coding agent](https://github.com/earendil-works/pi) 的本地浏览器界面，和 pi 共用本机配置与会话文件。这个版本保留原有全部能力，重点重做了**侧边栏，以及项目与对话的组织方式**。
+> ⚠️ **This is a personal fork**, not the official project. Upstream is
+> [agegr/pi-web](https://github.com/agegr/pi-web). It is not published to npm.
 
----
-
-## 使用上的优化
-
-### 1. 类 Codex 的清爽侧边栏
-- 对话列表改成**单行**：时间、消息数、分支等信息收进 hover 提示；置顶 / 归档 / 重命名 / 删除按钮只在 hover 时出现，不占视觉空间。
-- **按项目分组**，项目下的对话缩进显示，层级一眼看清。
-- 每个项目默认只显示**最近 5 个对话**，其余收在「展开其余 N 个」里，列表不再臃肿。
-- 支持**置顶项目 / 置顶对话**，可拖动排序。
-- 去掉了重复的「新对话」整行、常驻的「仅 Git 仓库根目录」提示等冗余控件，整体更通透。
-
-### 2. 以项目为中心
-- **创建项目**：填项目名 + 直接选择电脑上的文件夹，创建后立刻可以开聊；还没有对话的项目也会保留在列表里（显示「暂无聊天」）。
-- **删除项目**：连同该项目下的**所有对话历史**一起删除（级联删除子智能体），磁盘上的项目源码文件夹**不会**被删除。
-- **归档**：可以**按项目归档**（里面的对话一起归档），也可以**单独归档某个对话**。归档是软隐藏，文件仍在磁盘上，随时可恢复。
-- 归档内容收进右上角的**弹窗**，不占侧边栏空间。
-
-### 3. 对话标题自动生成
-- 新建对话发出**第一条消息后自动生成标题**，不用再手动点按钮。
-- 只对本次新建的对话生效，不会为浏览旧对话而偷偷消耗 token；手动改过名字的对话不会被覆盖。
-
-### 4. 原生文件夹选择（macOS）
-- 创建项目 / 自定义工作目录时**直接弹出 Finder 选择框**；非 macOS 或没有图形界面时自动回退到应用内目录浏览。
-
-### 5. 本地启动体验
-- 从哪个目录启动 pi-web，就默认用哪个目录作为工作区。
-- macOS 下以**独立 Chrome 应用窗口**打开，更接近一个桌面应用。
-- 附带一个实例管理页（`/instances.html`）。
-- 费用显示默认换算为**人民币**。
+Pi-web · Codex-style uses the **same local config and session files as pi**
+(`~/.pi/agent`), so you keep every existing conversation, model, and skill —
+only the interface is rethought around *projects*.
 
 ---
 
-## 安装与运行
+## Why this fork?
 
-需要 Node.js **22.19.0** 或更高版本。
+The original sidebar lists every conversation in a dense, flat tree. Once you
+have a few projects and dozens of chats, it gets crowded fast. This fork
+redesigns the whole sidebar after **Codex**:
+
+- conversations become **single-line** rows, actions only appear on hover;
+- everything is grouped **by project**, with the newest **5** chats shown first;
+- there is a real **Create project** flow and a place for **archived** work.
+
+If you like pi but find the UI busy, this is for you.
+
+## ✨ Highlights
+
+| | |
+| --- | --- |
+| 🧹 **Codex-style sidebar** | Single-line chats, hover-only actions, grouped by project, newest 5 with “Show N more”. |
+| 📁 **Create projects** | Pick a name and a folder, then chat. Empty projects stay visible as “No chats yet”. |
+| 🗑️ **Delete a project** | Removes the project **and all its conversation history** (the source folder is untouched). |
+| 🗄️ **Archive** | Archive a whole project (its chats go with it) or a single conversation. Soft-hide, restore anytime, managed from a dialog. |
+| ✨ **Automatic titles** | A new chat is titled from its **first message** — no button to click. Existing/renamed chats are never overwritten. |
+| 🔎 **Native folder picker** | On macOS the Create-project dialog opens **Finder** directly; falls back to the in-app browser elsewhere. |
+| 📌 **Pins** | Pin projects and conversations, reorder by dragging. |
+| 🌏 **i18n** | English, 简体中文, 繁體中文. |
+
+## 📸 Screenshots
+
+> Add your own screenshots to `docs/sidebar.png` and `docs/create-project.png`
+> (then uncomment the block below) — visuals are what sell the fork.
+
+<!--
+<p align="center">
+  <img src="./docs/sidebar.png" alt="Codex-style sidebar" width="820" />
+</p>
+<p align="center">
+  <img src="./docs/create-project.png" alt="Create project" width="820" />
+</p>
+-->
+
+## 🚀 Quick start
+
+Requires **Node.js 22.19.0+**.
 
 ```bash
 git clone https://github.com/huangzx8090/pi-web.git
@@ -48,53 +72,59 @@ npm install
 npm run dev
 ```
 
-开发服务器运行在 <http://127.0.0.1:30141>。
+Open <http://127.0.0.1:30141>. If no model is configured yet, open the
+**Models** panel and sign in or add an API key.
 
-生产模式：
+Production:
 
 ```bash
 npm run build
 node bin/pi-web.js
-# 或全局安装本仓库
+# or install globally
 npm install -g .
 pi-web
 ```
 
-首次使用如果还没有配置模型，请打开界面里的 **Models** 面板登录或填写 API Key。
+## Differences from upstream
 
----
+| Area | Upstream | This fork |
+| --- | --- | --- |
+| Sidebar rows | Two lines + always-visible actions | One line, hover actions |
+| Grouping | Flat list / recent projects | Project groups with indent + collapse |
+| Project lifecycle | Implicit (derived from cwd) | Create / delete / archive |
+| Session titles | Manual button | Automatic from the first message |
+| Folder picking | In-app browser | Native macOS Finder (+ fallback) |
+| Cost display | USD | CNY |
 
-## 数据位置
+Everything else — agent turns, branching, file explorer, Git worktrees, model
+and skill config — is inherited from upstream.
 
-本版本新增的数据写在 pi 的 agent 目录下，与上游会话文件放在一起：
+## Data
 
-| 文件 | 内容 |
+This fork stores its own state next to pi's session files:
+
+| File | Contents |
 | --- | --- |
-| `~/.pi/agent/pi-web/projects.json` | 手动创建的项目 |
-| `~/.pi/agent/pi-web/archive.json` | 已归档的项目 / 对话 |
-| `~/.pi/agent/pi-web/pins.json` | 置顶的项目 / 对话 |
+| `~/.pi/agent/pi-web/projects.json` | Projects you created |
+| `~/.pi/agent/pi-web/archive.json` | Archived projects / conversations |
+| `~/.pi/agent/pi-web/pins.json` | Pinned projects / conversations |
 
-删除或归档只影响**对话历史文件**，不会删除你的项目源码目录。
+Deleting or archiving only affects **conversation history files**; your project
+source folders are never deleted.
 
----
+## Staying in sync with upstream
 
-## 与上游的关系
+```bash
+git fetch origin
+git rebase origin/main
+git push --force-with-lease fork main
+```
 
-- 本仓库是 [agegr/pi-web](https://github.com/agegr/pi-web) 的 fork，保留上游历史与 MIT 协议。
-- 同步上游更新：
+## Credits & license
 
-  ```bash
-  git fetch origin
-  git rebase origin/main
-  git push --force-with-lease fork main
-  ```
-
-- 其中「独立 Chrome 窗口 / 实例管理」等属于**本地个性化定制**，与上游的通用功能无关，提 PR 时建议拆分。
-
----
-
-## 致谢与许可
-
-基于 [agegr/pi-web](https://github.com/agegr/pi-web) 与 [pi](https://github.com/earendil-works/pi)。
+Built on [agegr/pi-web](https://github.com/agegr/pi-web) and
+[earendil-works/pi](https://github.com/earendil-works/pi).
 
 [MIT](./LICENSE)
+
+<div align="center"><sub>If this saves you time, a ⭐ helps others find it.</sub></div>

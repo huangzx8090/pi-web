@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="340" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#1f2937"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="520" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="340" fill="url(#bg)"/>
+  <g opacity="0.5">
+    <rect x="72" y="70" width="150" height="34" rx="8" fill="#111827" stroke="#334155"/>
+    <rect x="72" y="118" width="230" height="34" rx="8" fill="#111827" stroke="#334155"/>
+    <rect x="96" y="166" width="180" height="34" rx="8" fill="#111827" stroke="#334155"/>
+    <rect x="96" y="214" width="210" height="34" rx="8" fill="#111827" stroke="#334155"/>
+  </g>
+  <text x="360" y="128" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="58" font-weight="700">pi-web · Codex-style</text>
+  <text x="360" y="182" fill="url(#accent)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="26" font-weight="600">A cleaner, project-first UI for the pi coding agent</text>
+  <text x="360" y="228" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">sidebar · projects · archive · auto titles · native folder picker</text>
+  <text x="360" y="262" fill="#64748b" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15">personal fork of github.com/agegr/pi-web</text>
+</svg>

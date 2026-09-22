@@ -1,136 +1,122 @@
-# Pi Web
+<div align="center">
+  <img src="./docs/banner.svg" alt="pi-web · Codex-style" width="100%" />
+  <h1>pi-web · 类 Codex 个人改进版</h1>
+  <p><b>为 <a href="https://github.com/earendil-works/pi">pi coding agent</a> 打造的更清爽、以项目为中心的界面。</b><br/>
+  选一个文件夹 → 创建项目 → 直接开聊，不再被拥挤的侧边栏淹没。</p>
 
-[English](./README.md) | [日本語](./README.ja.md) | [Русский](./README.ru.md)
+  <p>
+    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT" />
+    <img src="https://img.shields.io/badge/node-%E2%89%A522.19.0-brightgreen.svg" alt="Node >= 22.19.0" />
+    <img src="https://img.shields.io/badge/UI-English%20%7C%20%E4%B8%AD%E6%96%87-blueviolet.svg" alt="i18n" />
+    <a href="https://github.com/huangzx8090/pi-web/stargazers"><img src="https://img.shields.io/github/stars/huangzx8090/pi-web?style=social" alt="Stars" /></a>
+  </p>
+  <p><a href="./README.md">English</a> · <a href="./README.zh-CN.md">简体中文</a></p>
+</div>
 
-[pi 编程智能体](https://github.com/earendil-works/pi)的本地浏览器界面。Pi Web 与 pi 共用本机配置和会话文件，可在浏览器中查找和继续对话、运行智能体、配置模型与资源，并查看项目文件。
+> ⚠️ **这是个人 fork / 改进版，不是官方项目。** 官方仓库是
+> [agegr/pi-web](https://github.com/agegr/pi-web)，本版本不发布到 npm。
 
-中文微信群：请查看 [GitHub Discussions 帖子](https://github.com/agegr/pi-web/discussions/271)。
+本版本与 pi **共用同一份本地配置和会话文件**（`~/.pi/agent`），所以你的历史对话、模型、技能都不会丢，只是界面围绕「项目」重新设计了一遍。
 
-![Pi Web 展示包含结构化 Markdown、工具调用和项目导航的 pi 会话](https://raw.githubusercontent.com/agegr/pi-web/main/docs/screenshot2.png)
+---
 
-## 功能
+## 为什么要做这个 fork？
 
-- **会话工作区**：按项目查找、继续、重命名、导出和删除对话，并查看运行状态、上下文占用、花费和压缩信息。
-- **两种分支方式**：**新会话**会从较早的消息创建独立会话文件；**从此处编辑**会在当前会话内创建分支。
-- **项目文件工具**：浏览和上传文件、查看 Git Diff，并预览源码、Markdown、图片、音频、PDF 和 DOCX；文件变化后会自动刷新。
-- **Git worktree**：从侧边栏切换 checkout，同时把同一仓库不同 worktree 的会话归在一起。
-- **网页配置**：无需离开 Pi Web，即可管理 Provider 登录和 API Key、模型、模型测试、插件包及技能。
-- **英文、简体中文和繁体中文界面**：Pi Web 首次打开时跟随浏览器语言，也可从顶部栏切换语言。
+上游的侧边栏把所有对话平铺在一个密集的树里。项目一多、对话一多，就非常拥挤。这个 fork 参考 **Codex** 重做了侧边栏：
 
-## 快速开始
+- 对话变成**单行**，操作按钮只在 hover 时出现；
+- 一切**按项目分组**，每个项目默认只显示**最近 5 个**对话；
+- 有了真正的**创建项目**流程，以及**归档**的去处。
 
-Pi Web 要求 Node.js 22.19.0 或更高版本。先用 `node --version` 检查版本，然后运行：
+如果你喜欢 pi，但觉得界面太挤，这个版本适合你。
 
-```bash
-npx @agegr/pi-web@latest
-```
+## ✨ 主要改进
 
-服务就绪后，命令行会尝试自动打开浏览器。如果没有打开，请访问 [http://127.0.0.1:30141](http://127.0.0.1:30141)。Pi Web 默认仅监听 `127.0.0.1`。
+| | |
+| --- | --- |
+| 🧹 **类 Codex 侧边栏** | 对话单行、hover 才出操作、按项目分组、默认最近 5 个（可「展开其余 N 个」）。 |
+| 📁 **创建项目** | 填项目名 + 选文件夹，创建后直接开聊；没对话的项目也保留，显示「暂无聊天」。 |
+| 🗑️ **删除项目** | 连同该项目**所有对话历史**一起删除（磁盘上的源码文件夹不受影响）。 |
+| 🗄️ **归档** | 可**按项目归档**（对话一起归档），也可**单独归档某个对话**；软隐藏，随时恢复，统一在弹窗里管理。 |
+| ✨ **标题自动生成** | 新建对话根据**第一条消息**自动命名，无需点按钮；已命名/手动改名的对话不会被覆盖。 |
+| 🔎 **原生文件夹选择** | macOS 下创建项目直接弹 **Finder**；其它平台自动回退到应用内目录浏览。 |
+| 📌 **置顶** | 项目与对话都可置顶，支持拖动排序。 |
+| 🌏 **多语言** | English、简体中文、繁體中文。 |
 
-如果尚未配置模型 Provider，请打开**模型（Models）**面板登录或添加 API Key。
+## 📸 截图
 
-如需全局安装 `pi-web` 命令：
+> 把截图放到 `docs/sidebar.png` 和 `docs/create-project.png`，然后取消下面注释即可。
 
-```bash
-npm install -g @agegr/pi-web@latest
-pi-web
-```
+<!--
+<p align="center">
+  <img src="./docs/sidebar.png" alt="类 Codex 侧边栏" width="820" />
+</p>
+<p align="center">
+  <img src="./docs/create-project.png" alt="创建项目" width="820" />
+</p>
+-->
 
-更新前先用 `Ctrl+C` 停止正在运行的进程，再次执行同一条安装命令。卸载时运行 `npm uninstall -g @agegr/pi-web`。
+## 🚀 快速开始
 
-## 配置
-
-端口和主机名以命令行参数为准，优先于对应的环境变量。`--no-open` 与 `PI_WEB_NO_OPEN=1` 中任意一个都会关闭自动打开浏览器。运行 `pi-web --help`（或 `-h`）可打印启动选项并以退出码 0 结束，不会启动服务；未知参数会报错并以退出码 1 结束。
-
-| 参数或环境变量 | 用途 | 默认值 |
-| --- | --- | --- |
-| `--help`、`-h` | 打印启动选项并退出 | — |
-| `--port <端口>`、`-p <端口>` 或 `PORT` | 服务端口 | `30141` |
-| `--hostname <主机>`、`-H <主机>` 或 `PI_WEB_HOSTNAME` | 监听主机名 | `127.0.0.1` |
-| `--no-open` 或 `PI_WEB_NO_OPEN=1` | 不自动打开浏览器 | 自动打开 |
-| `PI_WEB_ALLOWED_HOSTS` | 额外允许的代理或自定义主机名，多个值用逗号分隔，必须精确匹配 | 未设置 |
-| `PI_WEB_PASSWORD` | 启用浏览器密码登录；API 客户端可使用用户名为 `pi` 的 Basic Auth | 不启用认证 |
-
-例如：
-
-```bash
-pi-web --help
-pi-web -p 8080 -H 0.0.0.0 --no-open
-```
-
-### 远程访问
-
-监听非回环地址会暴露一个可执行高权限操作的智能体。在可信局域网中使用时，请设置足够长的随机密码：
+需要 **Node.js 22.19.0+**。
 
 ```bash
-PI_WEB_PASSWORD='足够长的随机密码' pi-web --hostname 0.0.0.0
-```
-
-密码认证不会加密连接。不要通过明文 HTTP 将 Pi Web 暴露到互联网；远程访问应使用可信反向代理提供 HTTPS，或通过可信 VPN。如果反向代理传递外部主机名，请把该名称精确加入 `PI_WEB_ALLOWED_HOSTS`。这个白名单不会改变 Pi Web 的监听地址。
-
-### HTTP 代理
-
-服务端的模型和 API 请求会读取标准的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY` 环境变量。
-
-macOS 或 Linux：
-
-```bash
-HTTP_PROXY=http://127.0.0.1:7890 \
-HTTPS_PROXY=http://127.0.0.1:7890 \
-NO_PROXY=localhost,127.0.0.1 \
-npx @agegr/pi-web@latest
-```
-
-Windows PowerShell：
-
-```powershell
-$env:HTTP_PROXY = "http://127.0.0.1:7890"
-$env:HTTPS_PROXY = "http://127.0.0.1:7890"
-$env:NO_PROXY = "localhost,127.0.0.1"
-npx @agegr/pi-web@latest
-```
-
-## 注意事项
-
-- **智能体数据**：Pi Web 默认读取 `~/.pi/agent` 下的 pi 数据，包括 `sessions/<编码后的工作目录>/<时间戳>_<uuid>.jsonl` 中的会话文件。可通过 `PI_CODING_AGENT_DIR` 指定其他 pi agent 目录。
-- **文件系统访问**：Pi Web 必须能读取智能体数据目录及会话记录中的工作目录。与现有 pi 会话共用数据时，请让 Pi Web 运行在与 pi 相同的文件系统环境中。
-- **共享配置**：模型面板使用 pi 的模型、设置和凭据存储，因此两种界面都能看到相关更改。
-- **文件访问边界**：文件浏览器仅能访问在 Pi Web 中选择过的工作目录，以及它已识别的项目或会话根目录；它不是通用的文件系统浏览器。
-- **Git worktree**：切换器何时显示、如何创建 worktree，以及删除会产生什么影响，见 [Pi Web 里的 Worktree](./docs/worktrees.zh-CN.md)。
-
-## 开发
-
-```bash
+git clone https://github.com/huangzx8090/pi-web.git
+cd pi-web
 npm install
 npm run dev
 ```
 
-开发服务器运行在 [http://127.0.0.1:30141](http://127.0.0.1:30141)。常用检查命令：
+打开 <http://127.0.0.1:30141>。如果还没配置模型，请打开 **Models** 面板登录或填写 API Key。
+
+生产模式：
 
 ```bash
-npm test
-node_modules/.bin/tsc --noEmit
-npm run lint
+npm run build
+node bin/pi-web.js
+# 或全局安装
+npm install -g .
+pi-web
 ```
 
-日常开发时不要运行 `next build` 或 `npm run build`。它们会写入 `.next/`，可能干扰开发服务器；仅在发布流程中执行构建。
+## 与上游的差异
 
-贡献者文档：[国际化](./docs/i18n.md)和[发布流程](./docs/release.md)。
+| 方面 | 上游 | 本版本 |
+| --- | --- | --- |
+| 侧边栏行 | 两行 + 常驻操作按钮 | 单行 + hover 操作 |
+| 分组 | 平铺 / 最近项目 | 项目分组 + 缩进 + 折叠 |
+| 项目生命周期 | 隐式（由 cwd 推导） | 创建 / 删除 / 归档 |
+| 会话标题 | 手动点按钮 | 首条消息后自动生成 |
+| 选择文件夹 | 应用内浏览 | macOS 原生 Finder（含回退） |
+| 费用显示 | 美元 | 人民币 |
 
-## 仓库结构
+其余能力（对话、分支、文件浏览、Git worktree、模型与技能配置）均继承上游。
 
-```text
-app/             Next.js 界面和 API 路由
-components/      React 界面组件
-hooks/           客户端状态和交互 hooks
-lib/             会话、智能体、模型、文件、Git 和安全逻辑
-public/          静态资源和 PWA 文件
-bin/             npm CLI 入口及启动参数解析
-docs/            面向用户和贡献者的专题文档
+## 数据位置
+
+本版本新增数据与 pi 的会话文件放在一起：
+
+| 文件 | 内容 |
+| --- | --- |
+| `~/.pi/agent/pi-web/projects.json` | 手动创建的项目 |
+| `~/.pi/agent/pi-web/archive.json` | 已归档的项目 / 对话 |
+| `~/.pi/agent/pi-web/pins.json` | 置顶的项目 / 对话 |
+
+删除或归档只影响**对话历史文件**，不会删除你的项目源码目录。
+
+## 同步上游
+
+```bash
+git fetch origin
+git rebase origin/main
+git push --force-with-lease fork main
 ```
 
-架构说明和详细文件地图见 [AGENTS.md](./AGENTS.md)。
+## 致谢与许可
 
-## 许可证
+基于 [agegr/pi-web](https://github.com/agegr/pi-web) 与
+[earendil-works/pi](https://github.com/earendil-works/pi)。
 
 [MIT](./LICENSE)
+
+<div align="center"><sub>如果它对你有帮助，点个 ⭐ 能让更多人看到。</sub></div>
