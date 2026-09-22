@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
-import { listSessionFamilies } from "@/lib/session-family";
+import { listSessionFamilies, type SessionFamily } from "@/lib/session-family";
 import { loadExplorerOpen, saveExplorerOpen } from "@/lib/file-explorer-state";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
@@ -12,12 +12,39 @@ import { formatRelativeTime } from "@/lib/i18n/format";
 import { useI18n } from "@/hooks/useI18n";
 import { useResizablePanel } from "@/hooks/useResizablePanel";
 import { DirectoryPicker } from "./DirectoryPicker";
+import { CreateProjectDialog } from "./CreateProjectDialog";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { ArchiveDialog } from "./ArchiveDialog";
+import { pickNativeDirectory } from "@/lib/native-directory-picker";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { SessionSearch } from "./SessionSearch";
 
 // Fixed row height for the session list. SessionItem renders at exactly this
 // height, so the list can be windowed (only the visible slice is mounted).
 const SESSION_LIST_ITEM_HEIGHT = 54;
+
+/** 一个项目默认最多显示最近使用的对话数（Codex 风格），其余可展开。 */
+const PROJECT_COLLAPSE_LIMIT = 5;
+
+/** 取路径最后一段作为项目名（完整路径放在 title 里）。 */
+function projectLabelOf(root: string): string {
+  const parts = root.replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : root;
+}
+
+/**
+ * Rows to render for one project. Families are already sorted most-recent-
+ * first, so the default is the newest PROJECT_COLLAPSE_LIMIT conversations;
+ * the rest stay behind an explicit "show more" toggle.
+ */
+export function getVisibleProjectFamilies<T>(
+  families: readonly T[],
+  options: { isExpanded: boolean; showAll: boolean },
+  limit = PROJECT_COLLAPSE_LIMIT,
+): T[] {
+  if (!options.isExpanded) return [];
+  return options.showAll ? [...families] : families.slice(0, Math.max(0, limit));
+}
 
 export function getSessionListIndices(count: number, scrollTop: number, viewportHeight: number, focusedIndex = -1): number[] {
   const overscan = 8;
@@ -150,6 +177,14 @@ interface WorktreeState {
 interface ProjectSelection {
   root: string;
   key: string;
+}
+
+/** User-created project from the server registry (see lib/project-registry.ts). */
+interface RegisteredProject {
+  key: string;
+  root: string;
+  name: string;
+  createdAt?: string;
 }
 
 interface ValidatedProject {
@@ -392,6 +427,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [customPathError, setCustomPathError] = useState<string | null>(null);
   const [customPathValidating, setCustomPathValidating] = useState(false);
   const [validatedProject, setValidatedProject] = useState<ValidatedProject | null>(null);
+  const [registeredProjects, setRegisteredProjects] = useState<RegisteredProject[]>([]);
+  const [archiveState, setArchiveState] = useState<{ projects: string[]; sessions: string[] }>({ projects: [], sessions: [] });
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [deleteProjectTarget, setDeleteProjectTarget] = useState<{ key: string; root: string; name: string; familyRoots: string[] } | null>(null);
+  const [deleteProjectBusy, setDeleteProjectBusy] = useState(false);
+  const [deleteProjectError, setDeleteProjectError] = useState<string | null>(null);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [createProjectBusy, setCreateProjectBusy] = useState(false);
+  const [createProjectError, setCreateProjectError] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Worktree switcher state
   const [worktreeState, setWorktreeState] = useState<WorktreeState | null>(null);
@@ -401,7 +445,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [wtError, setWtError] = useState<string | null>(null);
   const [wtBusy, setWtBusy] = useState(false);
   const [wtConfirmRemove, setWtConfirmRemove] = useState<string | null>(null);
-  const [worktreeLoadingCwd, setWorktreeLoadingCwd] = useState<string | null>(null);
+  const [, setWorktreeLoadingCwd] = useState<string | null>(null);
   const wtDropdownRef = useRef<HTMLDivElement>(null);
   const wtNewInputRef = useRef<HTMLInputElement>(null);
   const [explorerOpen, setExplorerOpen] = useState(true);
@@ -460,9 +504,130 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     storageKey: "pi-web:sidebar-session-pane-height",
     widthRef: sessionPaneHeightRef,
   });
-  const [listViewportH, setListViewportH] = useState(0);
-  const [listScrollTop, setListScrollTop] = useState(0);
-  const [focusedSessionId, setFocusedSessionId] = useState<string | null>(null);
+  // Read values are unused after the list moved to grouped rendering, but the
+  // setters still record scroll/viewport/focus for row rendering.
+  const [, setListViewportH] = useState(0);
+  const [, setListScrollTop] = useState(0);
+  const [, setFocusedSessionId] = useState<string | null>(null);
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem("pi-web:expanded-projects");
+      const parsed = raw ? JSON.parse(raw) as Record<string, boolean> : {};
+      // Drop legacy "|all" flags: show-all is intentionally session-only so a
+      // fresh load always starts from the five most recent conversations.
+      return Object.fromEntries(Object.entries(parsed).filter(([key]) => !key.includes("|all")));
+    } catch {
+      return {};
+    }
+  });
+  const toggleProjectExpanded = useCallback((key: string) => {
+    setExpandedProjects((prev) => {
+      const next = { ...prev, [key]: prev[key] === false };
+      try { localStorage.setItem("pi-web:expanded-projects", JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+  const [showAllProjects, setShowAllProjects] = useState<Record<string, boolean>>({});
+  const toggleProjectShowAll = useCallback((key: string) => {
+    setShowAllProjects((prev) => ({ ...prev, [key]: prev[key] !== true }));
+  }, []);
+  const [pinnedProjects, setPinnedProjects] = useState<string[]>([]);
+  const [pinnedSessions, setPinnedSessions] = useState<string[]>([]);
+  const [dragProjectKey, setDragProjectKey] = useState<string | null>(null);
+  const [hoveredProjectKey, setHoveredProjectKey] = useState<string | null>(null);
+  const [dragSessionId, setDragSessionId] = useState<string | null>(null);
+  // 置顶状态存在服务端（<agentDir>/pi-web/pins.json），跨窗口/设备一致，数组顺序即排列。
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/pins", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json() as { projects?: string[]; sessions?: string[] };
+        if (cancelled) return;
+        setPinnedProjects(Array.isArray(data.projects) ? data.projects : []);
+        setPinnedSessions(Array.isArray(data.sessions) ? data.sessions : []);
+      } catch { /* ignore */ }
+    };
+    void load();
+    const timer = setInterval(() => void load(), 5000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [refreshKey]);
+  const postPins = useCallback(async (body: Record<string, unknown>) => {
+    const res = await fetch("/api/pins", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error("pin failed");
+  }, []);
+  const toggleProjectPinned = useCallback(async (key: string) => {
+    const prev = pinnedProjects;
+    const pinned = !prev.includes(key);
+    setPinnedProjects(pinned ? [...prev, key] : prev.filter((k) => k !== key));
+    try {
+      await postPins({ kind: "project", id: key, pinned });
+    } catch {
+      setPinnedProjects(prev);
+    }
+  }, [pinnedProjects, postPins]);
+  const toggleSessionPinned = useCallback(async (id: string) => {
+    const prev = pinnedSessions;
+    const pinned = !prev.includes(id);
+    setPinnedSessions(pinned ? [...prev, id] : prev.filter((k) => k !== id));
+    try {
+      await postPins({ kind: "session", id, pinned });
+    } catch {
+      setPinnedSessions(prev);
+    }
+  }, [pinnedSessions, postPins]);
+  const reorderPinned = useCallback(async (kind: "project" | "session", order: string[]) => {
+    if (kind === "project") setPinnedProjects(order);
+    else setPinnedSessions(order);
+    try {
+      await postPins({ kind, order });
+    } catch { /* 下一次轮询会重新同步 */ }
+  }, [postPins]);
+
+  const postArchive = useCallback(async (body: Record<string, unknown>) => {
+    const res = await fetch("/api/archive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error("archive failed");
+  }, []);
+  const toggleProjectArchived = useCallback(async (key: string) => {
+    const prev = archiveState.projects;
+    const archived = !prev.includes(key);
+    setArchiveState((state) => ({
+      ...state,
+      projects: archived ? [...state.projects, key] : state.projects.filter((k) => k !== key),
+    }));
+    try {
+      await postArchive({ kind: "project", id: key, archived });
+    } catch {
+      setArchiveState((state) => ({ ...state, projects: prev }));
+    }
+  }, [archiveState.projects, postArchive]);
+  const toggleSessionArchived = useCallback(async (id: string) => {
+    const prev = archiveState.sessions;
+    const archived = !prev.includes(id);
+    setArchiveState((state) => ({
+      ...state,
+      sessions: archived ? [...state.sessions, id] : state.sessions.filter((k) => k !== id),
+    }));
+    try {
+      await postArchive({ kind: "session", id, archived });
+    } catch {
+      setArchiveState((state) => ({ ...state, sessions: prev }));
+    }
+  }, [archiveState.sessions, postArchive]);
+
+  const requestDeleteProject = useCallback((target: { key: string; root: string; name: string; familyRoots: string[] }) => {
+    setDeleteProjectError(null);
+    setDeleteProjectTarget(target);
+  }, []);
   const listScrollRafRef = useRef<number | null>(null);
   const handleListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const top = e.currentTarget.scrollTop;
@@ -530,12 +695,78 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     }
   }, []);
 
+  const confirmDeleteProject = useCallback(async () => {
+    const target = deleteProjectTarget;
+    if (!target || deleteProjectBusy) return;
+    setDeleteProjectBusy(true);
+    setDeleteProjectError(null);
+    try {
+      // Delete every conversation (and its subagents, via the cascade in the
+      // session DELETE route), then drop the project registry entry.
+      for (const sessionId of target.familyRoots) {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+        if (!res.ok && res.status !== 404) {
+          const data = await res.json().catch(() => ({})) as { error?: string };
+          throw new Error(data.error ?? `HTTP ${res.status}`);
+        }
+        onSessionDeleted?.(sessionId);
+      }
+      await fetch(`/api/projects?key=${encodeURIComponent(target.key)}`, { method: "DELETE" });
+      setArchiveState((state) => ({ ...state, projects: state.projects.filter((k) => k !== target.key) }));
+      setPinnedProjects((state) => state.filter((k) => k !== target.key));
+      setDeleteProjectTarget(null);
+      await loadSessions(true, true);
+    } catch (e) {
+      setDeleteProjectError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleteProjectBusy(false);
+    }
+  }, [deleteProjectTarget, deleteProjectBusy, onSessionDeleted, loadSessions]);
+
   const initialLoadDone = useRef(false);
   useEffect(() => {
     const isFirst = !initialLoadDone.current;
     initialLoadDone.current = true;
     loadSessions(isFirst, !isFirst);
   }, [loadSessions, refreshKey]);
+
+  // User-created projects (may have no sessions yet). Reloaded with the session
+  // list so a project created in another tab/window shows up here too.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/projects", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json() as { projects?: RegisteredProject[] };
+        if (!cancelled) setRegisteredProjects(Array.isArray(data.projects) ? data.projects : []);
+      } catch {
+        // Keep the last known registry; the next refresh retries.
+      }
+    };
+    void load();
+    return () => { cancelled = true; };
+  }, [refreshKey]);
+
+  // Archived projects / conversations (soft hide; files stay on disk).
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/archive", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json() as { projects?: string[]; sessions?: string[] };
+        if (!cancelled) setArchiveState({
+          projects: Array.isArray(data.projects) ? data.projects : [],
+          sessions: Array.isArray(data.sessions) ? data.sessions : [],
+        });
+      } catch {
+        // Keep the last known archive; the next refresh retries.
+      }
+    };
+    void load();
+    return () => { cancelled = true; };
+  }, [refreshKey]);
 
   // Browser storage is unavailable during server rendering. Restore the panel
   // preference after hydration so a collapsed explorer stays collapsed on reload.
@@ -709,13 +940,16 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (worktreeState?.worktrees.some((w) => w.path === cwd)) {
       return projectSelection(worktreeState.projectRoot, worktreeState.projectKey);
     }
+    // User-created projects have a stable key even before their first session.
+    const registered = registeredProjects.find((project) => project.root === cwd);
+    if (registered) return projectSelection(registered.root, registered.key);
     const match = allSessions.find((session) => (
       session.cwd === cwd || (session.projectRoot ?? session.cwd) === cwd
     ));
     return match
       ? projectSelection(match.projectRoot ?? match.cwd, workspaceKeyOf(match))
       : projectSelection(cwd, cwd);
-  }, [validatedProject, worktreeState, allSessions, projectSelection]);
+  }, [validatedProject, worktreeState, registeredProjects, allSessions, projectSelection]);
 
   // A worktree/session refresh can hydrate the stable key without changing
   // cwd, so notify when either changes. The parent treats same-cwd key changes
@@ -856,11 +1090,18 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     }
   }, [customPathValue, customPathValidating]);
 
-  const handleCustomPathClick = useCallback(() => {
-    setCustomPathOpen(true);
+  const handleCustomPathClick = useCallback(async () => {
     setCustomPathError(null);
     setDropdownOpen(false);
-  }, []);
+    // Native Finder first; fall back to the in-app browser when unavailable.
+    const result = await pickNativeDirectory(t("createProject.chooseFolderPrompt"));
+    if (result.status === "picked") {
+      void commitCustomPath(result.cwd);
+      return;
+    }
+    if (result.status === "canceled") return;
+    setCustomPathOpen(true);
+  }, [commitCustomPath, t]);
   const handleDefaultCwd = useCallback(async () => {
     try {
       const res = await fetch("/api/default-cwd", { method: "POST" });
@@ -973,15 +1214,70 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onSelectSession(s, false, entryId, blockIndex);
   }, [onSelectSession]);
 
-  const handleNewSession = useCallback(() => {
-    if (!selectedCwd) return;
+  const createNewSessionIn = useCallback((cwd: string) => {
     // Generate a temporary UUID client-side — no backend call needed.
     // Pi will be spawned lazily when the user sends the first message.
     const tempId = typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
       : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-    onNewSession?.(tempId, selectedCwd);
-  }, [selectedCwd, onNewSession]);
+    onNewSession?.(tempId, cwd);
+  }, [onNewSession]);
+
+  const handleNewSession = useCallback(async () => {
+    // 有选定工作区就在那里新建；没有（例如从桌面 App 直接打开）就落到默认目录。
+    if (selectedCwd) {
+      createNewSessionIn(selectedCwd);
+      return;
+    }
+    try {
+      const res = await fetch("/api/default-cwd", { method: "POST" });
+      const data = await res.json() as { cwd?: string };
+      if (data.cwd) {
+        setSelectedCwd(data.cwd);
+        createNewSessionIn(data.cwd);
+      }
+    } catch { /* ignore */ }
+  }, [selectedCwd, createNewSessionIn]);
+
+  const handleCreateProject = useCallback(async (input: { name: string; cwd: string }) => {
+    setCreateProjectBusy(true);
+    setCreateProjectError(null);
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json().catch(() => ({})) as {
+        project?: RegisteredProject;
+        cwd?: string;
+        error?: string;
+      };
+      if (!res.ok || data.error || !data.project) {
+        setCreateProjectError(data.error ?? `HTTP ${res.status}`);
+        return;
+      }
+      const project = data.project;
+      setRegisteredProjects((prev) => [
+        ...prev.filter((entry) => entry.key !== project.key),
+        project,
+      ]);
+      setCreateProjectOpen(false);
+      const cwd = data.cwd || project.root;
+      setValidatedProject({ cwd, root: project.root, key: project.key });
+      setSelectedCwd(cwd);
+      createNewSessionIn(cwd);
+    } catch (e) {
+      setCreateProjectError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreateProjectBusy(false);
+    }
+  }, [createNewSessionIn]);
+
+  const openCreateProject = useCallback(() => {
+    setCreateProjectError(null);
+    setCreateProjectOpen(true);
+  }, []);
 
   const recentProjects = getRecentProjects(allSessions);
   const showProjectFilter = recentProjects.length > 8;
@@ -1009,45 +1305,85 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     [projectActivity, selectedProject],
   );
 
-  const filteredSessions = selectedProject
-    ? sessionsForProject(allSessions, selectedProject.key)
-    : allSessions;
+  // 所有项目（置顶优先，其余按最近活跃），每个项目下带上它的对话家族。Codex 风格的全局列表。
+  // 用户创建但还没有对话的项目也会显示在这里（families 为空）。
+  const projectNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const project of registeredProjects) {
+      if (project.name) names.set(project.key, project.name);
+    }
+    return names;
+  }, [registeredProjects]);
+  const allProjectGroups = useMemo(() => {
+    const sessionGroups = getRecentProjects(allSessions).map((project) => ({
+      key: project.key,
+      root: project.root,
+      families: listSessionFamilies(sessionsForProject(allSessions, project.key))
+        // Pinned conversations live in the dedicated section above, so drop
+        // them here instead of rendering the same row twice.
+        .filter((family) => !pinnedSessions.includes(family.root.id)),
+    }));
+    const seen = new Set(sessionGroups.map((group) => group.key));
+    const registeredOnly = registeredProjects
+      .filter((project) => !seen.has(project.key))
+      .map((project) => ({ key: project.key, root: project.root, families: [] as SessionFamily[] }));
+    const groups = [...sessionGroups, ...registeredOnly];
+    const pinnedIndex = new Map(pinnedProjects.map((key, index) => [key, index]));
+    return groups.sort((a, b) => {
+      const ia = pinnedIndex.has(a.key) ? pinnedIndex.get(a.key)! : Number.MAX_SAFE_INTEGER;
+      const ib = pinnedIndex.has(b.key) ? pinnedIndex.get(b.key)! : Number.MAX_SAFE_INTEGER;
+      return ia - ib;
+    });
+  }, [allSessions, pinnedProjects, pinnedSessions, registeredProjects]);
+
+  // Root session ids per project, including pinned and archived ones. Used to
+  // delete a whole project; subagents are removed by the session DELETE cascade.
+  const projectRootSessionIds = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const session of allSessions) {
+      if (session.relation?.kind === "subagent") continue;
+      const key = workspaceKeyOf(session);
+      const list = map.get(key) ?? [];
+      list.push(session.id);
+      map.set(key, list);
+    }
+    return map;
+  }, [allSessions]);
+
+  const archivedProjectKeys = useMemo(() => new Set(archiveState.projects), [archiveState.projects]);
+  const archivedSessionIds = useMemo(() => new Set(archiveState.sessions), [archiveState.sessions]);
+  // Active tree: drop archived projects, and drop individually archived
+  // conversations from projects that are still active.
+  const projectGroups = useMemo(() => allProjectGroups
+    .filter((group) => !archivedProjectKeys.has(group.key))
+    .map((group) => ({
+      ...group,
+      families: group.families.filter((family) => !archivedSessionIds.has(family.root.id)),
+    })), [allProjectGroups, archivedProjectKeys, archivedSessionIds]);
+  const archivedProjectGroups = useMemo(
+    () => allProjectGroups.filter((group) => archivedProjectKeys.has(group.key)),
+    [allProjectGroups, archivedProjectKeys],
+  );
+  const archivedSessionFamilies = useMemo(
+    () => allProjectGroups
+      .filter((group) => !archivedProjectKeys.has(group.key))
+      .flatMap((group) => group.families.filter((family) => archivedSessionIds.has(family.root.id))),
+    [allProjectGroups, archivedProjectKeys, archivedSessionIds],
+  );
+  const archivedCount = archivedProjectGroups.length + archivedSessionFamilies.length;
+
+  const pinnedSessionList = useMemo(() => {
+    const byId = new Map(allSessions.map((session) => [session.id, session]));
+    return pinnedSessions
+      .map((id) => byId.get(id))
+      .filter((session): session is SessionInfo => Boolean(session))
+      .filter((session) => !archivedSessionIds.has(session.id) && !archivedProjectKeys.has(workspaceKeyOf(session)));
+  }, [allSessions, pinnedSessions, archivedSessionIds, archivedProjectKeys]);
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
     && selectedCwd
     && selectedProject?.key === worktreeState.projectKey
-  );
-  const worktreeGuide = selectedCwd
-    && worktreeState
-    && selectedProject?.key === worktreeState.projectKey
-    && !showWorktreeSwitcher
-    ? (worktreeState.isGit
-        ? {
-             label: t("sidebar.openRepoRoot"),
-             title: t("sidebar.openRepoRootTitle"),
-          }
-        : {
-             label: t("sidebar.gitRepoRootOnly"),
-             title: t("sidebar.gitRepoRootOnlyTitle"),
-          })
-    : null;
-  const worktreeLoading = Boolean(selectedCwd && worktreeLoadingCwd === selectedCwd);
-  const inactiveWorktreeSelector = worktreeGuide
-    ?? (worktreeLoading && !showWorktreeSwitcher
-      ? {
-           label: t("sidebar.worktrees"),
-           title: t("sidebar.checkingWorktrees"),
-        }
-      : null);
-
-  const sessionFamilies = listSessionFamilies(filteredSessions);
-
-  const virtualIndices = getSessionListIndices(
-    sessionFamilies.length,
-    listScrollTop,
-    listViewportH,
-    sessionFamilies.findIndex((family) => family.root.id === focusedSessionId),
   );
 
   return (
@@ -1073,6 +1409,66 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           onSelect={(path) => void commitCustomPath(path)}
         />
       )}
+      {createProjectOpen && (
+        <CreateProjectDialog
+          initialPath={customPathValue || selectedCwd || undefined}
+          busy={createProjectBusy}
+          error={createProjectError}
+          onCancel={() => {
+            setCreateProjectOpen(false);
+            setCreateProjectError(null);
+          }}
+          onCreate={(input) => void handleCreateProject(input)}
+        />
+      )}
+      {deleteProjectTarget && (
+        <ConfirmDialog
+          title={t("projectDelete.title")}
+          body={t("projectDelete.body", {
+            name: projectNames.get(deleteProjectTarget.key) ?? projectLabelOf(deleteProjectTarget.root),
+            count: deleteProjectTarget.familyRoots.length,
+          })}
+          confirmLabel={t("projectDelete.confirm")}
+          busyLabel={t("projectDelete.deleting")}
+          busy={deleteProjectBusy}
+          danger
+          onCancel={() => {
+            if (deleteProjectBusy) return;
+            setDeleteProjectTarget(null);
+            setDeleteProjectError(null);
+          }}
+          onConfirm={() => void confirmDeleteProject()}
+        />
+      )}
+      {deleteProjectError && (
+        <div role="alert" style={{ position: "fixed", left: 12, bottom: 12, zIndex: 1200, padding: "8px 12px", border: "1px solid rgba(239,68,68,0.4)", borderRadius: 6, background: "var(--bg-panel)", color: "#ef4444", fontSize: 12 }}>
+          {deleteProjectError}
+        </div>
+      )}
+      {archiveOpen && (
+        <ArchiveDialog
+          projects={archivedProjectGroups.map((group) => ({
+            key: group.key,
+            root: group.root,
+            name: projectNames.get(group.key) ?? projectLabelOf(group.root),
+            count: group.families.length,
+          }))}
+          sessions={archivedSessionFamilies.map((family) => family.root)}
+          onClose={() => setArchiveOpen(false)}
+          onUnarchiveProject={(key) => void toggleProjectArchived(key)}
+          onUnarchiveSession={(id) => void toggleSessionArchived(id)}
+          onOpenSession={(session) => {
+            setArchiveOpen(false);
+            handleSelectSessionFromList(session);
+          }}
+          onDeleteSession={(id) => {
+            // Drop the now-dangling archive entry, then delete the file.
+            void toggleSessionArchived(id);
+            onSessionDeleted?.(id);
+            loadSessions();
+          }}
+        />
+      )}
       {/* Header */}
       <div
         style={{
@@ -1085,14 +1481,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           <PiWebTitle />
           <div style={{ display: "flex", gap: 6 }}>
             <button
-              onClick={handleNewSession}
-              disabled={!selectedCwd}
+              onClick={() => void handleNewSession()}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
                 background: "var(--bg-hover)",
                 border: "1px solid var(--border)",
-                color: selectedCwd ? "var(--text-muted)" : "var(--text-dim)",
-                cursor: selectedCwd ? "pointer" : "not-allowed",
+                color: "var(--text-muted)",
+                cursor: "pointer",
                 height: 32,
                 paddingLeft: 10,
                 paddingRight: 12,
@@ -1103,16 +1498,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 flexShrink: 0,
                 transition: "background 0.12s, color 0.12s, border-color 0.12s",
               }}
-             title={selectedCwd ? t("sidebar.newSessionTitle", { path: selectedCwd }) : t("sidebar.selectProject")}
+              title={selectedCwd ? t("sidebar.newSessionTitle", { path: selectedCwd }) : t("sidebar.newChat")}
               onMouseEnter={(e) => {
-                if (!selectedCwd) return;
                 e.currentTarget.style.background = "var(--bg-selected)";
                 e.currentTarget.style.color = "var(--accent)";
                 e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "var(--bg-hover)";
-                e.currentTarget.style.color = selectedCwd ? "var(--text-muted)" : "var(--text-dim)";
+                e.currentTarget.style.color = "var(--text-muted)";
                 e.currentTarget.style.borderColor = "var(--border)";
               }}
             >
@@ -1321,7 +1715,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleCustomPathClick();
+                  void handleCustomPathClick();
                 }}
                 style={{
                   display: "flex",
@@ -1342,6 +1736,33 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   <line x1="1" y1="5" x2="9" y2="5" />
                 </svg>
                 <span>{t("sidebar.customPath")}</span>
+              </button>
+
+              {/* Codex-style project creation: name + folder in one dialog */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDropdownOpen(false);
+                  openCreateProject();
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  width: "100%",
+                  padding: "8px 10px",
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  fontSize: 11,
+                }}
+              >
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <path d="M1.5 3h4l1.5 2h7.5v7.5h-13z" />
+                </svg>
+                <span>{t("createProject.title")}</span>
               </button>
           </AnimatedDropdown>
         </div>
@@ -1681,42 +2102,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </div>
           );
         })()}
-        {!sessionSearchOpen && inactiveWorktreeSelector && (
-          <button
-            type="button"
-            aria-disabled="true"
-            tabIndex={-1}
-            title={inactiveWorktreeSelector.title}
-            style={{
-              width: "100%",
-              height: 29,
-              boxSizing: "border-box",
-              marginTop: 6,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "0 10px",
-              border: "1px solid var(--border)",
-              borderRadius: 7,
-              background: "var(--bg-hover)",
-              color: "var(--text-dim)",
-              fontSize: 11,
-              lineHeight: 1.35,
-              whiteSpace: "nowrap",
-              textAlign: "left",
-              cursor: "default",
-              opacity: 0.82,
-            }}
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <line x1="6" y1="3" x2="6" y2="15" />
-              <circle cx="18" cy="6" r="3" />
-              <circle cx="6" cy="18" r="3" />
-              <path d="M18 9a9 9 0 0 1-9 9" />
-            </svg>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{inactiveWorktreeSelector.label}</span>
-          </button>
-        )}
       </div>
 
       {/* Session list */}
@@ -1753,49 +2138,356 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {error}
           </div>
         )}
-        {!loading && !error && sessionFamilies.length === 0 && (
-          <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
+        {/* Pinned conversations (drag to reorder) */}
+        {!loading && !error && pinnedSessionList.length > 0 && (
+          <div style={{ borderBottom: "1px solid var(--border)" }}>
+            <div style={{ padding: "8px 10px 2px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
+              {t("sidebar.pinned")}
+            </div>
+            {pinnedSessionList.map((s) => (
+              <div
+                key={s.id}
+                draggable
+                onDragStart={(e) => { setDragSessionId(s.id); e.dataTransfer.effectAllowed = "move"; }}
+                onDragOver={(e) => { if (dragSessionId) e.preventDefault(); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (!dragSessionId || dragSessionId === s.id) return;
+                  const order = [...pinnedSessions];
+                  const from = order.indexOf(dragSessionId);
+                  const to = order.indexOf(s.id);
+                  setDragSessionId(null);
+                  if (from < 0 || to < 0) return;
+                  order.splice(from, 1);
+                  order.splice(to, 0, dragSessionId);
+                  void reorderPinned("session", order);
+                }}
+                onDragEnd={() => setDragSessionId(null)}
+                style={{ opacity: dragSessionId === s.id ? 0.45 : 1 }}
+              >
+                <SessionItem
+                  session={s}
+                  isSelected={s.id === selectedSessionId}
+                  isRunning={runningSessionIds.has(s.id)}
+                  isUnread={unreadSessionIds.has(s.id)}
+                  isPinned
+                  onTogglePin={() => toggleSessionPinned(s.id)}
+                  onClick={() => handleSelectSessionFromList(s)}
+                  onRenamed={loadSessions}
+                  onDeleted={(id) => { onSessionDeleted?.(id); loadSessions(); }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+        {!loading && !error && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 10px 4px" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
+              {t("sidebar.projects")}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+              {archivedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setArchiveOpen(true)}
+                  title={`${t("sidebar.archived")} (${archivedCount})`}
+                  aria-label={`${t("sidebar.archived")} (${archivedCount})`}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 3,
+                    height: 20, padding: "0 6px",
+                    border: "none", background: "none", color: "var(--text-dim)",
+                    cursor: "pointer", borderRadius: 5, fontSize: 11,
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-dim)"; }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="4" width="18" height="4" rx="1" />
+                    <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+                    <path d="M10 12h4" />
+                  </svg>
+                  {archivedCount}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={openCreateProject}
+                title={t("createProject.title")}
+                aria-label={t("createProject.title")}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 20, height: 20, padding: 0,
+                  border: "none", background: "none", color: "var(--text-dim)",
+                  cursor: "pointer", borderRadius: 5,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--accent)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-dim)"; }}
+              >
+                <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M6 2v8M2 6h8" /></svg>
+              </button>
+            </div>
+          </div>
+        )}
+        {!loading && !error && projectGroups.length === 0 && archivedCount === 0 && (
+          <div style={{ padding: "8px 14px 16px", color: "var(--text-muted)", fontSize: 12 }}>
             {t("sidebar.noSessions")}
           </div>
         )}
-        {sessionFamilies.length > 0 && (
-          <div
-            style={{
-              position: "relative",
-              height: sessionFamilies.length * SESSION_LIST_ITEM_HEIGHT,
-            }}
-          >
-            {virtualIndices.map((index) => {
-              const family = sessionFamilies[index];
-              const familySessions = [family.root, ...family.subagents];
-              const displaySession = family.latestModified === family.root.modified
-                ? family.root
-                : { ...family.root, modified: family.latestModified };
-              // Bubble blur after the input's save handler before unpinning the row.
-              return (
-                <div
-                  key={family.root.id}
-                  onFocus={() => setFocusedSessionId(family.root.id)}
-                  onBlur={() => setFocusedSessionId(null)}
-                  style={{ position: "absolute", top: index * SESSION_LIST_ITEM_HEIGHT, left: 0, right: 0 }}
+        {!loading && !error && projectGroups.map((group) => {
+          const isExpanded = expandedProjects[group.key] !== false;
+          const showAll = showAllProjects[group.key] === true;
+          const canCollapse = group.families.length > PROJECT_COLLAPSE_LIMIT;
+          const visibleFamilies = getVisibleProjectFamilies(group.families, { isExpanded, showAll });
+          const hiddenCount = group.families.length - visibleFamilies.length;
+          const activity = projectActivity.get(group.key);
+          const isSelectedProject = group.key === selectedProject?.key;
+          const isProjectPinned = pinnedProjects.includes(group.key);
+          const projectHovered = hoveredProjectKey === group.key;
+          return (
+            <div key={group.key} style={{ paddingBottom: 2 }}>
+              <div
+                role="button"
+                tabIndex={0}
+                title={group.root}
+                draggable={isProjectPinned}
+                onDragStart={(e) => {
+                  if (!isProjectPinned) return;
+                  setDragProjectKey(group.key);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(e) => { if (dragProjectKey) e.preventDefault(); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (!dragProjectKey || dragProjectKey === group.key) return;
+                  const order = [...pinnedProjects];
+                  const from = order.indexOf(dragProjectKey);
+                  const to = order.indexOf(group.key);
+                  setDragProjectKey(null);
+                  if (from < 0 || to < 0) return;
+                  order.splice(from, 1);
+                  order.splice(to, 0, dragProjectKey);
+                  void reorderPinned("project", order);
+                }}
+                onDragEnd={() => setDragProjectKey(null)}
+                onMouseEnter={() => setHoveredProjectKey(group.key)}
+                onMouseLeave={() => setHoveredProjectKey((current) => (current === group.key ? null : current))}
+                onClick={() => { if (!isSelectedProject) setSelectedCwd(group.root); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    if (!isSelectedProject) setSelectedCwd(group.root);
+                  }
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "8px 10px",
+                  cursor: "pointer",
+                  color: isSelectedProject ? "var(--text)" : "var(--text-muted)",
+                  background: isSelectedProject || projectHovered ? "var(--bg-hover)" : "none",
+                }}
+              >
+                <button
+                  type="button"
+                  aria-label={isExpanded ? t("sidebar.showLess") : t("sidebar.showMore")}
+                  onClick={(e) => { e.stopPropagation(); toggleProjectExpanded(group.key); }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 16,
+                    height: 16,
+                    padding: 0,
+                    border: "none",
+                    background: "none",
+                    color: "var(--text-dim)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    transform: isExpanded ? "rotate(90deg)" : "none",
+                    transition: "transform 0.12s",
+                  }}
                 >
-                  <SessionItem
-                    session={displaySession}
-                    isSelected={familySessions.some((session) => session.id === selectedSessionId)}
-                    isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
-                    isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
-                    onClick={() => handleSelectSessionFromList(family.root)}
-                    onRenamed={loadSessions}
-                    onDeleted={(id) => {
-                      onSessionDeleted?.(id);
-                      loadSessions();
-                    }}
+                  <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 2l4 4-4 4" /></svg>
+                </button>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true" style={{ flexShrink: 0, color: "var(--text-dim)" }}><path d="M1.5 3h4l1.5 2h7.5v7.5h-13z" /></svg>
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 500 }}>
+                  {projectNames.get(group.key) ?? projectLabelOf(group.root)}
+                </span>
+                {activity && (activity.running > 0 || activity.unread > 0) && (
+                  <span
+                    title={t("sidebar.newActivity")}
+                    aria-label={t("sidebar.newActivity")}
+                    style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: "var(--accent)" }}
                   />
-                </div>
-              );
-            })}
-          </div>
-        )}
+                )}
+                {projectHovered && (
+                  <>
+                    {group.families.length > 0 && (
+                      <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0 }}>{group.families.length}</span>
+                    )}
+                    <button
+                      type="button"
+                      title={isProjectPinned ? t("sidebar.unpin") : t("sidebar.pin")}
+                      aria-label={isProjectPinned ? t("sidebar.unpin") : t("sidebar.pin")}
+                      onClick={(e) => { e.stopPropagation(); toggleProjectPinned(group.key); }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 20,
+                        height: 20,
+                        padding: 0,
+                        border: "none",
+                        background: "none",
+                        color: isProjectPinned ? "var(--accent)" : "var(--text-dim)",
+                        cursor: "pointer",
+                        flexShrink: 0,
+                        borderRadius: 5,
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill={isProjectPinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      title={t("sidebar.newSessionTitle", { path: group.root })}
+                      aria-label={t("sidebar.newSessionTitle", { path: group.root })}
+                      onClick={(e) => { e.stopPropagation(); createNewSessionIn(group.root); }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 20,
+                        height: 20,
+                        padding: 0,
+                        border: "none",
+                        background: "none",
+                        color: "var(--text-dim)",
+                        cursor: "pointer",
+                        flexShrink: 0,
+                        borderRadius: 5,
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M6 2v8M2 6h8" /></svg>
+                    </button>
+                    <button
+                      type="button"
+                      title={t("sidebar.archiveProject")}
+                      aria-label={t("sidebar.archiveProject")}
+                      onClick={(e) => { e.stopPropagation(); void toggleProjectArchived(group.key); }}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, padding: 0, border: "none", background: "none", color: "var(--text-dim)", cursor: "pointer", flexShrink: 0, borderRadius: 5 }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="4" width="18" height="4" rx="1" />
+                        <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+                        <path d="M10 12h4" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      title={t("sidebar.deleteProject")}
+                      aria-label={t("sidebar.deleteProject")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        requestDeleteProject({
+                          key: group.key,
+                          root: group.root,
+                          name: projectNames.get(group.key) ?? projectLabelOf(group.root),
+                          familyRoots: projectRootSessionIds.get(group.key) ?? [],
+                        });
+                      }}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, padding: 0, border: "none", background: "none", color: "var(--text-dim)", cursor: "pointer", flexShrink: 0, borderRadius: 5 }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                        <path d="M10 11v6M14 11v6" />
+                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                      </svg>
+                    </button>
+                  </>
+                )}
+              </div>
+              {visibleFamilies.map((family) => {
+                const familySessions = [family.root, ...family.subagents];
+                const displaySession = family.latestModified === family.root.modified
+                  ? family.root
+                  : { ...family.root, modified: family.latestModified };
+                return (
+                  <div
+                    key={family.root.id}
+                    onFocus={() => setFocusedSessionId(family.root.id)}
+                    onBlur={() => setFocusedSessionId(null)}
+                  >
+                    <SessionItem
+                      session={displaySession}
+                      indent={1}
+                      isSelected={familySessions.some((session) => session.id === selectedSessionId)}
+                      isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
+                      isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
+                      isPinned={pinnedSessions.includes(family.root.id)}
+                      onTogglePin={() => toggleSessionPinned(family.root.id)}
+                      onToggleArchive={() => void toggleSessionArchived(family.root.id)}
+                      onClick={() => handleSelectSessionFromList(family.root)}
+                      onRenamed={loadSessions}
+                      onDeleted={(id) => {
+                        onSessionDeleted?.(id);
+                        loadSessions();
+                      }}
+                    />
+                  </div>
+                );
+              })}
+              {group.families.length === 0 && (
+                <button
+                  type="button"
+                  onClick={() => createNewSessionIn(group.root)}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "2px 10px 9px 36px",
+                    border: "none",
+                    background: "none",
+                    color: "var(--text-dim)",
+                    cursor: "pointer",
+                    fontSize: 11,
+                  }}
+                >
+                  {t("sidebar.noChats")}
+                </button>
+              )}
+              {isExpanded && canCollapse && (
+                <button
+                  type="button"
+                  onClick={() => toggleProjectShowAll(group.key)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "2px 10px 8px 34px",
+                    border: "none",
+                    background: "none",
+                    color: "var(--text-dim)",
+                    cursor: "pointer",
+                    fontSize: 11,
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; }}
+                >
+                  <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: showAll ? "rotate(180deg)" : "none" }}>
+                    <polyline points="2 3.5 5 6.5 8 3.5" />
+                  </svg>
+                  {showAll ? t("sidebar.showLess") : t("sidebar.showMoreCount", { count: hiddenCount })}
+                </button>
+              )}
+            </div>
+          );
+        })}
         </div>
         </SessionSearch>
       </div>
@@ -2076,15 +2768,67 @@ function showProjectActivity(
   );
 }
 
+/** Compact, borderless icon button for hover actions inside a sidebar row. */
+function RowActionButton({
+  onClick,
+  title,
+  active = false,
+  children,
+}: {
+  onClick: (event: React.MouseEvent) => void;
+  title: string;
+  active?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 26,
+        height: 26,
+        padding: 0,
+        flexShrink: 0,
+        background: active ? "var(--bg-selected)" : "none",
+        border: "none",
+        borderRadius: 6,
+        color: active ? "var(--accent)" : "var(--text-dim)",
+        cursor: "pointer",
+        transition: "background 0.12s, color 0.12s",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "var(--bg-selected)";
+        e.currentTarget.style.color = active ? "var(--accent)" : "var(--text)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = active ? "var(--bg-selected)" : "none";
+        e.currentTarget.style.color = active ? "var(--accent)" : "var(--text-dim)";
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 function SessionItem({
   session,
   isSelected,
   isRunning,
   isUnread,
+  isPinned = false,
+  isArchived = false,
+  onTogglePin,
+  onToggleArchive,
   onClick,
   onRenamed,
   onDeleted,
   depth = 0,
+  indent = 0,
   hasChildren = false,
   collapsed = false,
   onToggleCollapse,
@@ -2093,10 +2837,16 @@ function SessionItem({
   isSelected: boolean;
   isRunning?: boolean;
   isUnread?: boolean;
+  isPinned?: boolean;
+  isArchived?: boolean;
+  onTogglePin?: () => void;
+  onToggleArchive?: () => void;
   onClick: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
   depth?: number;
+  /** Extra left indent for conversations nested under a project row. */
+  indent?: number;
   hasChildren?: boolean;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -2208,7 +2958,7 @@ function SessionItem({
         height: SESSION_LIST_ITEM_HEIGHT,
         display: "flex",
         alignItems: "center",
-        paddingLeft: depth > 0 ? depth * 12 + 14 : 14,
+        paddingLeft: 14 + indent * 22 + depth * 12,
         paddingRight: 8,
         cursor: confirmDelete || renaming ? "default" : "pointer",
         background: confirmDelete
@@ -2291,55 +3041,48 @@ function SessionItem({
       ) : (
         /* ── Normal view ── */
         <>
-          {/* Subagent indicator for child sessions */}
-          {depth > 0 && (
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+          {/* Leading indicator: subagent glyph, live status, or pinned bubble */}
+          {depth > 0 ? (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
               <rect x="5" y="7" width="14" height="11" rx="2" />
               <path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" />
             </svg>
-          )}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-                minWidth: 0,
-                fontSize: 12,
-                fontWeight: isSelected ? 500 : 400,
-                lineHeight: 1.4,
-                color: "var(--text)",
-              }}
-              title={title}
-            >
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-                {title}
-              </span>
-            </div>
-            <div style={{ marginTop: 2, display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
-              {isRunning ? (
-                <RunningSessionIndicator />
-              ) : isUnread ? (
-                <UnreadSessionIndicator />
-              ) : (
-                <span title={session.modified}>{formatRelativeTime(session.modified, locale)}</span>
-              )}
-              <span>{t("sidebar.messagesCount", { count: session.messageCount })}</span>
-              {session.isWorktree && session.branch && (
-                <span
-                  title={`Worktree: ${session.cwd}`}
-                  style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--accent)", minWidth: 0, overflow: "hidden" }}
-                >
-                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                    <line x1="6" y1="3" x2="6" y2="15" />
-                    <circle cx="18" cy="6" r="3" />
-                    <circle cx="6" cy="18" r="3" />
-                    <path d="M18 9a9 9 0 0 1-9 9" />
-                  </svg>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.branch}</span>
-                </span>
-              )}
-            </div>
+          ) : isRunning ? (
+            <RunningSessionIndicator />
+          ) : isUnread ? (
+            <UnreadSessionIndicator />
+          ) : isArchived ? (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden="true">
+              <rect x="3" y="4" width="18" height="4" rx="1" />
+              <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+              <path d="M10 12h4" />
+            </svg>
+          ) : isPinned ? (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden="true">
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+            </svg>
+          ) : null}
+
+          {/* Single-line title; metadata is folded into the tooltip */}
+          <div
+            title={[
+              title,
+              formatRelativeTime(session.modified, locale),
+              t("sidebar.messagesCount", { count: session.messageCount }),
+              session.isWorktree && session.branch ? session.branch : null,
+            ].filter(Boolean).join(" · ")}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: 13,
+              fontWeight: isSelected ? 500 : 400,
+              color: "var(--text)",
+            }}
+          >
+            {title}
           </div>
 
           {/* Collapse toggle — always visible when has children */}
@@ -2362,64 +3105,54 @@ function SessionItem({
             </button>
           )}
 
-          {/* Action buttons — shown on hover */}
-          {hovered && !session.transient && (
-            <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-              <button
-                onClick={startRename}
-                title={t("sidebar.rename")}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 32, height: 32, padding: 0,
-                  background: "var(--bg-hover)", border: "1px solid var(--border)",
-                  borderRadius: 7, color: "var(--text-muted)",
-                  cursor: "pointer", flexShrink: 0,
-                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--bg-selected)";
-                  e.currentTarget.style.color = "var(--accent)";
-                  e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text-muted)";
-                  e.currentTarget.style.borderColor = "var(--border)";
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          {/* Hover actions — compact, borderless */}
+          {!session.transient && hovered && (
+            <div style={{ display: "flex", gap: 0, flexShrink: 0 }}>
+              {onToggleArchive && (
+                <RowActionButton
+                  onClick={(e) => { e.stopPropagation(); onToggleArchive(); }}
+                  title={isArchived ? t("sidebar.unarchiveSession") : t("sidebar.archiveSession")}
+                  active={isArchived}
+                >
+                  {isArchived ? (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="4" width="18" height="4" rx="1" />
+                      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+                      <path d="M12 17v-5M9.5 14.5 12 12l2.5 2.5" />
+                    </svg>
+                  ) : (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="4" width="18" height="4" rx="1" />
+                      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+                      <path d="M10 12h4" />
+                    </svg>
+                  )}
+                </RowActionButton>
+              )}
+              {onTogglePin && (
+                <RowActionButton
+                  onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
+                  title={isPinned ? t("sidebar.unpin") : t("sidebar.pin")}
+                  active={isPinned}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill={isPinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                  </svg>
+                </RowActionButton>
+              )}
+              <RowActionButton onClick={startRename} title={t("sidebar.rename")}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
                 </svg>
-              </button>
-              <button
-                onClick={handleDeleteClick}
-                title={t("sidebar.deleteWithShiftClick")}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 32, height: 32, padding: 0,
-                  background: "var(--bg-hover)", border: "1px solid var(--border)",
-                  borderRadius: 7, color: "var(--text-muted)",
-                  cursor: "pointer", flexShrink: 0,
-                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "rgba(239,68,68,0.08)";
-                  e.currentTarget.style.color = "#ef4444";
-                  e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text-muted)";
-                  e.currentTarget.style.borderColor = "var(--border)";
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              </RowActionButton>
+              <RowActionButton onClick={handleDeleteClick} title={t("sidebar.deleteWithShiftClick")}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="3 6 5 6 21 6" />
                   <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
                   <path d="M10 11v6M14 11v6" />
                   <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
                 </svg>
-              </button>
+              </RowActionButton>
             </div>
           )}
         </>

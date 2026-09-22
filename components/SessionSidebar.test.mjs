@@ -4,7 +4,7 @@ import test from "node:test";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
-const { getSessionListIndices } = await jiti.import("./SessionSidebar.tsx");
+const { getSessionListIndices, getVisibleProjectFamilies } = await jiti.import("./SessionSidebar.tsx");
 
 const source = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
 const globalStyles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
@@ -31,6 +31,21 @@ test("session windows stay valid after a project shrinks and before the viewport
   assert.deepEqual(getSessionListIndices(5, 80000, 335, 1999), [0, 1, 2, 3, 4]);
   assert.deepEqual(getSessionListIndices(0, 80000, 335, 1999), []);
   assert.equal(getSessionListIndices(2000, 0, 0).length, 28);
+});
+
+test("projects show at most the five most recent conversations by default", () => {
+  const families = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ root: n }));
+  assert.deepEqual(
+    getVisibleProjectFamilies(families, { isExpanded: true, showAll: false }).map((f) => f.root),
+    [1, 2, 3, 4, 5],
+  );
+  assert.deepEqual(
+    getVisibleProjectFamilies(families, { isExpanded: true, showAll: true }).map((f) => f.root),
+    [1, 2, 3, 4, 5, 6, 7, 8],
+  );
+  assert.deepEqual(getVisibleProjectFamilies(families, { isExpanded: false, showAll: true }), []);
+  assert.equal(getVisibleProjectFamilies(families.slice(0, 3), { isExpanded: true, showAll: false }).length, 3);
+  assert.deepEqual(getVisibleProjectFamilies([], { isExpanded: true, showAll: false }), []);
 });
 
 test("only Shift+click bypasses session deletion confirmation", () => {
@@ -135,12 +150,29 @@ test("lifecycle refreshes bypass the cache while cross-window polling reuses it"
 
 test("does not expose disk-backed actions for transient sessions", () => {
   assert.match(sessionItemSource, /if \(session\.transient\) return;/);
-  assert.match(sessionItemSource, /\{hovered && !session\.transient && \(/);
+  assert.match(sessionItemSource, /\{!session\.transient && hovered && \(/);
 });
 
 test("hides subagent rows and aggregates their state into the main session row", () => {
-  assert.match(source, /const sessionFamilies = listSessionFamilies\(filteredSessions\)/);
+  assert.match(source, /listSessionFamilies\(sessionsForProject\(allSessions, project\.key\)\)/);
   assert.match(source, /familySessions\.some\(\(session\) => session\.id === selectedSessionId\)/);
   assert.match(source, /familySessions\.some\(\(session\) => runningSessionIds\.has\(session\.id\)\)/);
   assert.doesNotMatch(source, /function SessionTreeItem/);
+});
+
+test("archives projects and conversations via the archive API", () => {
+  assert.match(source, /fetch\("\/api\/archive", \{ cache: "no-store" \}\)/);
+  assert.match(source, /postArchive\(\{ kind: "project", id: key, archived \}\)/);
+  assert.match(source, /postArchive\(\{ kind: "session", id, archived \}\)/);
+  // Archiving a project hides everything under it; an archived project's rows
+  // must not also appear in the individually-archived list.
+  assert.match(source, /filter\(\(group\) => !archivedProjectKeys\.has\(group\.key\)\)/);
+});
+
+test("deleting a project removes every conversation root and the registry entry", () => {
+  assert.match(source, /requestDeleteProject\(\{/);
+  assert.match(source, /for \(const sessionId of target\.familyRoots\)/);
+  assert.match(source, /`\/api\/sessions\/\$\{encodeURIComponent\(sessionId\)\}`/);
+  assert.match(source, /`\/api\/projects\?key=\$\{encodeURIComponent\(target\.key\)\}`/);
+  assert.match(source, /projectRootSessionIds\.get\(group\.key\) \?\? \[\]/);
 });

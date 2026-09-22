@@ -6,6 +6,8 @@ import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import type { ChatScrollPosition } from "@/lib/chat-scroll-position";
+import { formatCost, formatCostCompact } from "@/lib/currency";
+import { shouldAutoNameSession } from "@/lib/auto-name";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
@@ -289,6 +291,15 @@ export function AppShell() {
   const [sessionStats, setSessionStats] = useState<SessionStatsInfo | null>(null);
   const [autoNameStatus, setAutoNameStatus] = useState<AutoNameStatus>({ kind: "idle" });
   const autoNameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Session ids that already produced (or are producing) a title this load.
+  const autoNamedSessionIdsRef = useRef<Set<string>>(new Set());
+  const autoNameInFlightRef = useRef<Set<string>>(new Set());
+  // Debounce/retry timers, keyed by session id, so one conversation never
+  // schedules the same request twice.
+  const autoNameTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Sessions created during this page load. Auto-naming only touches these, so
+  // opening an old unnamed session does not silently spend title tokens.
+  const freshSessionIdsRef = useRef<Set<string>>(new Set());
   const activeSessionIdRef = useRef<string | null>(selectedSession?.id ?? null);
   activeSessionIdRef.current = selectedSession?.id ?? null;
   const handleSessionStatsChange = useCallback((stats: SessionStatsInfo | null) => {
@@ -305,9 +316,12 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
+    const timers = autoNameTimersRef.current;
     return () => {
       if (sessionCopyTimerRef.current) clearTimeout(sessionCopyTimerRef.current);
       if (autoNameTimerRef.current) clearTimeout(autoNameTimerRef.current);
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
     };
   }, []);
 
@@ -834,6 +848,9 @@ export function AppShell() {
     invalidateWorkspaceRestore();
     activeNewSessionDraftKeyRef.current = null;
     setNewSessionCwd(null);
+    // Mark it fresh so the auto-naming effect will title it from the first
+    // user message (browsing old unnamed sessions must not spend tokens).
+    freshSessionIdsRef.current.add(session.id);
     setSelectedSession(session);
     hydrateSelectedSession(session.id);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
@@ -910,12 +927,17 @@ export function AppShell() {
     });
   }, [deliverSessionNotification, selectedSession, translate]);
 
-  const handleAutoName = useCallback(async () => {
-    const sessionId = selectedSession?.id;
-    if (!sessionId || autoNameStatus.kind === "naming") return;
-    if (autoNameTimerRef.current) clearTimeout(autoNameTimerRef.current);
-    setActiveTopPanel(null);
-    setAutoNameStatus({ kind: "naming" });
+  const requestAutoName = useCallback(async (sessionId: string, options: { silent?: boolean; attempt?: number } = {}) => {
+    const attempt = options.attempt ?? 0;
+    if (!sessionId) return;
+    if (autoNamedSessionIdsRef.current.has(sessionId) || autoNameInFlightRef.current.has(sessionId)) return;
+    autoNameInFlightRef.current.add(sessionId);
+
+    if (!options.silent) {
+      if (autoNameTimerRef.current) clearTimeout(autoNameTimerRef.current);
+      setActiveTopPanel(null);
+      setAutoNameStatus({ kind: "naming" });
+    }
 
     try {
       const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/auto-name`, {
@@ -925,26 +947,75 @@ export function AppShell() {
       if (!response.ok || !body.title) {
         throw new Error(body.error || `HTTP ${response.status}`);
       }
-
       const title = body.title.trim();
+      if (!title) throw new Error("Empty title");
+
+      autoNamedSessionIdsRef.current.add(sessionId);
       setRefreshKey((key) => key + 1);
-      if (activeSessionIdRef.current !== sessionId) return;
-      setSelectedSession((current) => current?.id === sessionId ? { ...current, name: title } : current);
-      setSessionStats((current) => current?.sessionId === sessionId ? { ...current, sessionName: title } : current);
-      setAutoNameStatus({ kind: "success" });
-      autoNameTimerRef.current = setTimeout(() => setAutoNameStatus({ kind: "idle" }), 1800);
+      if (activeSessionIdRef.current === sessionId) {
+        setSelectedSession((current) => current?.id === sessionId ? { ...current, name: title } : current);
+        setSessionStats((current) => current?.sessionId === sessionId ? { ...current, sessionName: title } : current);
+      }
+      if (!options.silent) {
+        setAutoNameStatus({ kind: "success" });
+        autoNameTimerRef.current = setTimeout(() => setAutoNameStatus({ kind: "idle" }), 1800);
+      }
     } catch (error) {
-      if (activeSessionIdRef.current !== sessionId) return;
-      const message = error instanceof Error ? error.message : String(error);
-      setAutoNameStatus({ kind: "error", message });
-      autoNameTimerRef.current = setTimeout(() => setAutoNameStatus({ kind: "idle" }), 5000);
+      if (!options.silent && activeSessionIdRef.current === sessionId) {
+        const message = error instanceof Error ? error.message : String(error);
+        setAutoNameStatus({ kind: "error", message });
+        autoNameTimerRef.current = setTimeout(() => setAutoNameStatus({ kind: "idle" }), 5000);
+      } else if (attempt < 3) {
+        // Silent auto-naming: the JSONL may not be flushed yet (or the title
+        // request hit a transient error), so retry a couple of times.
+        autoNameTimersRef.current.set(sessionId, setTimeout(() => {
+          autoNameTimersRef.current.delete(sessionId);
+          void requestAutoName(sessionId, { ...options, attempt: attempt + 1 });
+        }, 1500 * (attempt + 1)));
+      }
+    } finally {
+      autoNameInFlightRef.current.delete(sessionId);
     }
-  }, [autoNameStatus.kind, selectedSession?.id]);
+  }, []);
+
+  const handleAutoName = useCallback(() => {
+    const sessionId = selectedSession?.id;
+    if (!sessionId || autoNameStatus.kind === "naming") return;
+    void requestAutoName(sessionId, { silent: false });
+  }, [autoNameStatus.kind, requestAutoName, selectedSession?.id]);
 
   useEffect(() => {
     if (autoNameTimerRef.current) clearTimeout(autoNameTimerRef.current);
     setAutoNameStatus({ kind: "idle" });
   }, [selectedSession?.id]);
+
+  // Auto-title a freshly started conversation from its first user message.
+  useEffect(() => {
+    const session = selectedSession;
+    if (!session) return;
+    const userMessages = sessionStats?.sessionId === session.id ? (sessionStats.userMessages ?? 0) : 0;
+    const eligible = shouldAutoNameSession(
+      {
+        id: session.id,
+        name: session.name,
+        transient: session.transient,
+        relationKind: session.relation?.kind ?? null,
+        messageCount: session.messageCount,
+        userMessages,
+      },
+      {
+        isFresh: freshSessionIdsRef.current.has(session.id),
+        alreadyHandled: autoNamedSessionIdsRef.current.has(session.id) || autoNameInFlightRef.current.has(session.id),
+        hasPendingTimer: autoNameTimersRef.current.has(session.id),
+      },
+    );
+    if (!eligible) return;
+    // Small debounce so the first user turn is on disk before we summarize it.
+    autoNameTimersRef.current.set(session.id, setTimeout(() => {
+      autoNameTimersRef.current.delete(session.id);
+      void requestAutoName(session.id, { silent: true });
+    }, 600));
+  }, [selectedSession, sessionStats, requestAutoName]);
 
   const handleExplorerRefresh = useCallback(() => {
     setExplorerRefreshKey((k) => k + 1);
@@ -1583,7 +1654,7 @@ export function AppShell() {
       : value >= 1000
         ? `${(value / 1000).toFixed(0)}k`
         : String(value);
-    const costText = cost > 0 ? (cost >= 0.01 ? `$${cost.toFixed(2)}` : `<$0.01`) : null;
+    const costText = formatCostCompact(cost);
 
     let contextColor = "var(--text-muted)";
     let desktopContextText: string | null = null;
@@ -1604,7 +1675,7 @@ export function AppShell() {
       tooltipParts.push(`out: ${tokens.output.toLocaleString(locale)}`);
       tooltipParts.push(`cache read: ${tokens.cacheRead.toLocaleString(locale)}`);
       tooltipParts.push(`cache write: ${tokens.cacheWrite.toLocaleString(locale)}`);
-      if (cost > 0) tooltipParts.push(`cost: $${cost.toFixed(4)}`);
+      if (cost > 0) tooltipParts.push(`cost: ${formatCost(cost)}`);
     }
     if (contextUsage?.contextWindow) {
       const percent = contextUsage.percent;
@@ -2116,7 +2187,7 @@ export function AppShell() {
                     const ctx = contextUsage ?? sessionStats.contextUsage;
                     const formatCompact = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
                     const extraTokenRows = [
-                       ...(sessionStats.cost > 0 ? [[translate("session.cost"), `$${sessionStats.cost.toFixed(4)}`]] : []),
+                       ...(sessionStats.cost > 0 ? [[translate("session.cost"), formatCost(sessionStats.cost)]] : []),
                        ...(ctx?.contextWindow ? [[translate("session.context"), `${ctx.percent !== null ? `${ctx.percent.toFixed(1)}%` : "?"} / ${formatCompact(ctx.contextWindow)}`]] : []),
                        // Cache hit rate = cache reads / (input + cache writes + cache reads) — the denominator covers all input-class tokens.
                        ...(sessionStats.tokens.cacheRead + sessionStats.tokens.cacheWrite > 0 && sessionStats.tokens.cacheRead + sessionStats.tokens.cacheWrite + sessionStats.tokens.input > 0

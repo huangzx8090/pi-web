@@ -86,7 +86,7 @@ nextArgs.push("-H", hostname);
 const child = spawn(process.execPath, getNextNodeArgs(nextBin, nextArgs), {
   cwd: pkgDir,
   stdio: ["inherit", "pipe", "inherit"],
-  env: { ...process.env, PI_WEB_HOSTNAME: hostname },
+  env: { ...process.env, PI_WEB_HOSTNAME: hostname, PI_WEB_CWD: process.env.PI_WEB_CWD || process.cwd() },
 });
 wireChildProcessLifecycle(child);
 
@@ -114,7 +114,9 @@ child.stdout.on("data", (chunk) => {
         detached: true,
       });
     } else if (isMac) {
-      opener = spawn("open", [url], {
+      const launchCwd = process.env.PI_WEB_CWD || process.cwd();
+      const appUrl = `${url}/?cwd=${encodeURIComponent(launchCwd)}`;
+      opener = spawn("open", ["-na", "Google Chrome", "--args", `--app=${appUrl}`], {
         stdio: "ignore",
         detached: true,
       });

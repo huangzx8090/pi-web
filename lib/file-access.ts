@@ -3,6 +3,7 @@ import { homedir } from "os";
 import path from "path";
 import { getAdditionalAllowedRoots, normalizeSlashes } from "./allowed-roots";
 import { isExistingPathWithinRoots, isPathWithinRoots } from "./path-security";
+import { readProjectRegistry } from "./project-registry";
 import { listAllSessions } from "./session-reader";
 export { allowFileRoot, normalizeSlashes } from "./allowed-roots";
 export { isWindowsAbsolutePath } from "./paths";
@@ -29,6 +30,15 @@ export async function getAllowedFileRoots(): Promise<Set<string>> {
     // The project root (main repo shared by all worktrees) is browsable too —
     // the project dropdown lists it even when only worktrees have sessions.
     if (s.projectRoot) roots.add(normalizeSlashes(s.projectRoot));
+  }
+
+  // User-created projects are browsable before they have any session.
+  try {
+    for (const project of readProjectRegistry().projects) {
+      roots.add(normalizeSlashes(project.root));
+    }
+  } catch {
+    // ignore an unreadable registry
   }
 
   // Also allow ~/pi-cwd-* directories created by the default-cwd endpoint.
