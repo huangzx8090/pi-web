@@ -43,11 +43,15 @@
 | 📌 **置顶** | 项目与对话都可置顶，支持拖动排序。 |
 | 🌏 **多语言** | English、简体中文、繁體中文。 |
 
-## 📸 截图
+## 📸 截图 / 演示
 
-> 把截图放到 `docs/sidebar.png` 和 `docs/create-project.png`，然后取消下面注释即可。
+> 把演示 GIF 和截图放进去，然后取消下面注释即可。
+> 文件名：`docs/demo.gif`、`docs/sidebar.png`、`docs/create-project.png`。
 
 <!--
+<p align="center">
+  <img src="./docs/demo.gif" alt="类 Codex 侧边栏演示" width="820" />
+</p>
 <p align="center">
   <img src="./docs/sidebar.png" alt="类 Codex 侧边栏" width="820" />
 </p>

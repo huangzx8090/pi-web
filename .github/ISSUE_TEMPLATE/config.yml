@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Upstream pi-web
+    url: https://github.com/agegr/pi-web
+    about: The official project. Use its issue tracker for general pi-web problems.
+  - name: pi coding agent
+    url: https://github.com/earendil-works/pi
+    about: Issues with the underlying agent, models, or CLI.

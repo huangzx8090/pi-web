@@ -49,10 +49,14 @@ If you like pi but find the UI busy, this is for you.
 
 ## 📸 Screenshots
 
-> Add your own screenshots to `docs/sidebar.png` and `docs/create-project.png`
-> (then uncomment the block below) — visuals are what sell the fork.
+> Add your own demo GIF and screenshots, then uncomment the block below —
+> visuals are what sell the fork.
+> Files: `docs/demo.gif`, `docs/sidebar.png`, `docs/create-project.png`.
 
 <!--
+<p align="center">
+  <img src="./docs/demo.gif" alt="Codex-style sidebar demo" width="820" />
+</p>
 <p align="center">
   <img src="./docs/sidebar.png" alt="Codex-style sidebar" width="820" />
 </p>
