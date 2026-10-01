@@ -582,6 +582,7 @@ export const zhTWLocale: LocalePlugin = {
     "i18n.branches": "分支",
     "i18n.noActiveSession": "沒有作用中的工作階段",
     "i18n.noBranches": "此工作階段沒有分支",
+    "i18n.branchesLockedWhileRunning": "工作階段執行中，暫時無法切換分支",
     "i18n.source": "原始碼",
     "i18n.preview": "預覽",
     "i18n.diff": "Diff",

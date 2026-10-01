@@ -148,6 +148,10 @@ export function resolveSessionIdleTimeoutMs(
 const SESSION_IDLE_TIMEOUT_MS = resolveSessionIdleTimeoutMs();
 
 const SESSION_REPLACEMENT_COMMAND_TYPES = new Set(["fork", "clone"]);
+// pi writes a session file at the first user message, so a session with no
+// conversation on disk has nothing to copy from yet.
+const UNSAVED_SESSION_FORK_ERROR =
+  "This session has not been saved yet. Send a message before forking it.";
 const COMMANDS_ALLOWED_DURING_SESSION_REPLACEMENT = new Set([
   "get_state",
   "get_session_stats",
@@ -741,9 +745,13 @@ export class AgentSessionWrapper {
       }
 
       case "fork": {
-        if (this.isSessionRunningForReplacement()) {
-          throw new Error("Cannot fork while the session is running");
+        if (this.inner.isBashRunning) {
+          throw new Error("Cannot fork while a shell command is running");
         }
+        // Forking copies finished entries from disk into a new file and never
+        // touches this AgentSession, so a running source keeps its run. Only an
+        // idle source is shut down, because the browser moves to the child.
+        const keepSource = this.isSessionRunningForReplacement();
         return this.withSessionReplacement("fork", async () => {
           const entryId = command.entryId as string;
           const sessionManager = this.inner.sessionManager;
@@ -767,6 +775,7 @@ export class AgentSessionWrapper {
             newSessionFile = forkedManager.getSessionFile() as string;
           } else {
             // Fork after some history: copy path up to (but not including) the fork point
+            if (!existsSync(currentSessionFile)) throw new Error(UNSAVED_SESSION_FORK_ERROR);
             forkedManager = SessionManager.open(currentSessionFile, sessionDir);
             const forkedPath = forkedManager.createBranchedSession(entry.parentId);
             if (!forkedPath) throw new Error("Failed to create forked session");
@@ -785,14 +794,14 @@ export class AgentSessionWrapper {
           const newSessionId = forkedManager.getSessionId();
           cacheSessionPath(newSessionId, newSessionFile);
           invalidateSessionListCache();
-          await this.shutdownAfterSessionReplacement("fork");
+          if (!keepSource) await this.shutdownAfterSessionReplacement("fork");
           return { cancelled: false, newSessionId };
         });
       }
 
       case "fork_branch": {
-        if (this.isSessionRunningForReplacement()) {
-          throw new Error("Cannot fork while the session is running");
+        if (this.inner.isBashRunning) {
+          throw new Error("Cannot fork while a shell command is running");
         }
         const entryId = command.entryId as string;
         const sessionManager = this.inner.sessionManager;
@@ -800,6 +809,7 @@ export class AgentSessionWrapper {
         if (!sessionManager.isPersisted()) return { cancelled: true };
         if (!currentSessionFile) throw new Error("Persisted session is missing a session file");
         if (!sessionManager.getEntry(entryId)) throw new Error("Invalid entry ID for forking");
+        if (!existsSync(currentSessionFile)) throw new Error(UNSAVED_SESSION_FORK_ERROR);
 
         const sessionDir = sessionManager.getSessionDir();
         const sourceManager = SessionManager.open(currentSessionFile, sessionDir);

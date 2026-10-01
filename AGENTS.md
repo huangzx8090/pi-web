@@ -147,10 +147,13 @@ hooks/
 - `globalThis` survives Next.js hot-reload; plain module-level Map does not
 - Idle timeout: 10 minutes by default (`PI_WEB_IDLE_TIMEOUT_MS`, `0` disables). Concurrent `startRpcSession()` calls share a single start Promise (`globalThis.__piStartLocks`)
 
-### Fork must destroy the wrapper immediately
-`AgentSession.fork()` **mutates the wrapper's inner state in-place** — after fork, `inner.sessionId` is the *new* session's id. If the wrapper stays alive in the registry under the old id, the next request gets the already-forked state and subsequent forks produce a corrupt `parentSession` chain.
+### Fork never touches the running AgentSession
+Never fork through `AgentSession.fork()` / `AgentSessionRuntime.fork()`: they replace the session in place (after fork, `inner.sessionId` is the *new* id, and the runtime aborts the current run first, because the TUI holds one session per process). A wrapper still registered under the old id would then serve the forked state and corrupt the `parentSession` chain.
 
-**Fix**: `send("fork")` captures `newSessionId`, then calls `this.destroy()` before returning. The next request for the original session reloads a clean AgentSession from the original file.
+`send("fork")` and `send("fork_branch")` instead open a separate `SessionManager` on the source file and `createBranchedSession()` from it, so the source's in-memory session is never mutated. That is why forking is allowed **while the source is running** (only a running `!` shell command refuses it): the copy needs only finished entries, and pi appends each one synchronously in this same process, so the file on disk already holds them. The in-flight assistant message lands at `message_end`, after the fork point. A source whose first user message has not landed has no file yet, and fork refuses it with the upstream "has not been saved yet" wording. After a fork, an idle source is shut down because the browser moves to the child; a running source is left alone and keeps its run, and the sidebar keeps showing it as running. `clone` still refuses a running session: it copies the current branch, which is the run in progress.
+
+### In-session branching waits for the run
+pi's `navigateTree()` refuses while streaming or compacting, and that is structural: one file has one leaf pointer, a running agent appends every finished message under it, and navigating also swaps the agent's context. Moving the leaf mid-run would hang the rest of the turn off another branch. "Edit from here" is therefore hidden while the session is busy, and the BranchNavigator renders read-only (`locked`) with a note instead of switching; `handleLeafChange` refuses too, because switching only the view would render the live run under a different branch while the server leaf stayed put. To branch from a running session, fork it.
 
 ### Two kinds of branching — don't confuse them
 - **Fork** ("New session" on user message): creates a new independent `.jsonl` file. Shown as a child in the sidebar tree via `parentSession` header field.

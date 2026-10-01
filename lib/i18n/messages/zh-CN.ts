@@ -582,6 +582,7 @@ export const zhCNLocale: LocalePlugin = {
     "i18n.branches": "分支",
     "i18n.noActiveSession": "没有活动会话",
     "i18n.noBranches": "此会话没有分支",
+    "i18n.branchesLockedWhileRunning": "会话运行中，暂时无法切换分支",
     "i18n.source": "源代码",
     "i18n.preview": "预览",
     "i18n.diff": "Diff",

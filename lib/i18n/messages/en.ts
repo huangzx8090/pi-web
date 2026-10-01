@@ -582,6 +582,7 @@ export const enLocale: LocalePlugin = {
     "i18n.branches": "Branches",
     "i18n.noActiveSession": "No active session",
     "i18n.noBranches": "This session has no branches",
+    "i18n.branchesLockedWhileRunning": "Branches can't be switched while the session is running",
     "i18n.source": "Source",
     "i18n.preview": "Preview",
     "i18n.diff": "Diff",

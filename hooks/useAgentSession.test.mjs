@@ -161,13 +161,37 @@ test("only the session-mount load probes disk for external appends", () => {
   assert.equal([...source.matchAll(/\{ force: true \}/g)].length, 1);
 });
 
+test("forking stays available during a run while in-session branch switches wait for it", () => {
+  const forkSource = source.slice(
+    source.indexOf("  const handleFork = useCallback"),
+    source.indexOf("  const handleNavigate = useCallback"),
+  );
+  const leafChangeSource = source.slice(
+    source.indexOf("  const handleLeafChange = useCallback"),
+    source.indexOf("  const handleModelChange = useCallback"),
+  );
+
+  // Fork copies into a new file, so only a shell command blocks it; the
+  // in-session edit still waits because pi refuses navigate_tree mid-run.
+  assert.match(chatWindowSource, /onFork=\{bashRunning \|\| isNew \? undefined : handleFork\}/);
+  assert.match(chatWindowSource, /onEditContent=\{sessionBusy \? undefined : handleEditContent\}/);
+  assert.match(chatWindowSource, /onAskInNewChat && quotedSelection\.sourceEntryId && !bashRunning &&/);
+  assert.match(forkSource, /addNotice\(\{ type: "error", message:/);
+
+  assert.match(leafChangeSource, /if \(bashRunningRef\.current \|\| agentRunningRef\.current \|\| isCompacting\) return;/);
+  assert.match(source, /const branchSwitchLocked = agentRunning \|\| bashRunning \|\| isCompacting;/);
+  assert.match(source, /onBranchDataChange\(data\?\.tree \?\? \[\], activeLeafId, handleLeafChange, branchSwitchLocked\)/);
+  assert.match(appShellSource, /setBranchSwitchLocked\(locked\)/);
+  assert.equal((appShellSource.match(/locked=\{branchSwitchLocked\}/g) ?? []).length, 2);
+});
+
 test("first user messages expose both branch actions and edit before their own entry", () => {
   const navigateSource = source.slice(
     source.indexOf("  const handleNavigate = useCallback"),
     source.indexOf("  const handleLeafChange = useCallback"),
   );
 
-  assert.match(chatWindowSource, /onFork=\{sessionBusy \|\| isNew \? undefined : handleFork\}/);
+  assert.match(chatWindowSource, /onFork=\{bashRunning \|\| isNew \? undefined : handleFork\}/);
   assert.doesNotMatch(chatWindowSource, /idx === 0 && msg\.role === "user"/);
   assert.doesNotMatch(chatWindowSource, /prevAssistantEntryId/);
   assert.match(navigateSource, /type: "navigate_tree",\s*targetId: entryId/);
