@@ -10,10 +10,11 @@ import {
   joinFilePath,
   normalizeFilePathSlashes,
 } from "@/lib/file-paths";
-import type { GitFileStatus, GitFileStatusKind, GitStatusResponse } from "@/lib/git-types";
+import type { GitFileStatus, GitStatusResponse } from "@/lib/git-types";
 import type { FileIndexEntry } from "@/lib/file-fuzzy";
 import { buildSearchTree, type SearchTreeNode } from "@/lib/search-tree";
 import { useI18n } from "@/hooks/useI18n";
+import { GIT_STATUS_COLORS, GitStatusBadge } from "./GitStatusBadge";
 type Translate = ReturnType<typeof useI18n>["t"];
 
 interface FileEntry {
@@ -107,47 +108,6 @@ async function fetchGitStatus(cwd: string): Promise<GitStatusResponse> {
   const res = await fetch(`/api/git/status?${params.toString()}`);
   if (!res.ok) throw new Error(`Failed to load Git status (HTTP ${res.status})`);
   return res.json() as Promise<GitStatusResponse>;
-}
-
-const GIT_STATUS_KEYS: Record<GitFileStatusKind, string> = {
-  modified: "files.modified",
-  added: "files.added",
-  deleted: "files.deleted",
-  renamed: "files.renamed",
-  untracked: "files.untracked",
-  conflict: "files.conflict",
-};
-
-const GIT_STATUS_COLORS: Record<GitFileStatusKind, string> = {
-  modified: "#d6a84b",
-  added: "#4ade80",
-  deleted: "#f87171",
-  renamed: "#60a5fa",
-  untracked: "#4ade80",
-  conflict: "#f87171",
-};
-
-function GitStatusBadge({ status, t }: { status: GitFileStatus; t: Translate }) {
-  return (
-    <span
-      title={t(GIT_STATUS_KEYS[status.status])}
-      aria-label={t(GIT_STATUS_KEYS[status.status])}
-      style={{
-        width: 14,
-        height: 14,
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: GIT_STATUS_COLORS[status.status],
-        fontFamily: "var(--font-mono)",
-        fontSize: 11,
-        fontWeight: 600,
-      }}
-    >
-      {status.code}
-    </span>
-  );
 }
 
 function uploadFiles(

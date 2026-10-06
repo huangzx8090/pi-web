@@ -1880,3 +1880,14 @@ span.token.table {
     font-size: max(16px, var(--chat-content-font-size, 14px)) !important;
   }
 }
+
+/* Changes panel (right sidebar): one row per changed file. */
+.changes-row {
+  background: transparent;
+}
+.changes-row:hover {
+  background: var(--bg-hover);
+}
+.changes-row.is-open {
+  background: var(--bg-selected);
+}

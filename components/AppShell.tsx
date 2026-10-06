@@ -9,8 +9,10 @@ import type { ChatScrollPosition } from "@/lib/chat-scroll-position";
 import { formatCost, formatCostCompact } from "@/lib/currency";
 import { shouldAutoNameSession } from "@/lib/auto-name";
 import { FileViewer } from "./FileViewer";
+import { ChangesPanel } from "./ChangesPanel";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
+import { useGitChanges } from "@/hooks/useGitChanges";
 import { SettingsPanel, SettingsSectionIcon } from "./SettingsPanel";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { BranchNavigator, hasSessionBranches } from "./BranchNavigator";
@@ -73,6 +75,10 @@ type AutoNameStatus =
 
 const TOP_BAR_ICON_BUTTON_SIZE = 36;
 const AGENT_PANEL_WIDTH = 420;
+/** Pseudo tab id for the aggregate working-tree diff panel. */
+const CHANGES_TAB_ID = "__changes__";
+/** Only auto-open the changes panel when there is room to show it alongside the chat. */
+const CHANGES_AUTO_OPEN_MIN_WIDTH = 1200;
 
 function parkedNewSessionDraftKey(cwd: string): string {
   return `parked-new:${cwd}`;
@@ -401,15 +407,6 @@ export function AppShell() {
     setMobileToolbarMoreOpen((open) => !open);
   }, []);
 
-  const handleRightPanelToggle = useCallback(() => {
-    if (isMobile) {
-      setSidebarOpen(false);
-      setActiveTopPanel(null);
-      setMobileToolbarMoreOpen(false);
-    }
-    setRightPanelOpen((open) => !open);
-  }, [isMobile]);
-
   const handleRightPanelExpandToggle = useCallback(() => {
     setActiveTopPanel(null);
     setRightPanelExpanded((expanded) => !expanded);
@@ -482,6 +479,11 @@ export function AppShell() {
       if (saved.activeId) {
         setActiveFileTabId(saved.activeId);
         setRightPanelOpen(saved.open);
+      } else if (saved.open) {
+        // The panel was left open with no file tab — land on the changes panel
+        // instead of an empty "no file open" view.
+        setActiveFileTabId(CHANGES_TAB_ID);
+        setRightPanelOpen(true);
       }
     } catch { /* storage is optional */ }
     setTerminalsRestored(true);
@@ -527,6 +529,24 @@ export function AppShell() {
   const initialSessionId = initialNavigation.sessionId;
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
   const activeProjectKeyRef = useRef<string | null>(null);
+
+  // Aggregate working-tree diff for the right panel. Polling only runs while the
+  // panel is open or the session is working, so an idle tab costs nothing.
+  const sessionRunning = Boolean(selectedSession && runningSessionIds.has(selectedSession.id));
+  const gitChanges = useGitChanges({
+    cwd: activeCwd,
+    refreshKey: explorerRefreshKey,
+    // Always watch the project — slowly while the panel is closed so the tab
+    // badge stays honest, quickly while it is open or the session is working.
+    active: Boolean(activeCwd),
+    pollIntervalMs: rightPanelOpen || sessionRunning ? 2000 : 8000,
+  });
+  const changedFileCount = gitChanges.status?.files.length ?? 0;
+  const changesDismissedRef = useRef<Set<string>>(new Set());
+  const changesAutoOpenRef = useRef<{ sessionId: string | null; handled: boolean }>({
+    sessionId: null,
+    handled: false,
+  });
   // True once the initial ?session= URL param has been resolved (or confirmed absent)
   const [initialSessionRestored, setInitialSessionRestored] = useState<boolean>(() => !initialSessionId);
   // sessionStorage is empty during SSR. Applying the tab's remembered session
@@ -1078,6 +1098,36 @@ export function AppShell() {
     }
   }, [invalidateWorkspaceRestore, selectedSession, router]);
 
+  const openChangesPanel = useCallback(() => {
+    setActiveFileTabId(CHANGES_TAB_ID);
+    setRightPanelOpen(true);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
+  // Closing the panel while the changes tab is up counts as "not interested" for
+  // this session, and stops the auto-open effect from popping it back up.
+  const closeRightPanel = useCallback(() => {
+    const sessionId = selectedSession?.id ?? null;
+    if (sessionId && activeFileTabId === CHANGES_TAB_ID) changesDismissedRef.current.add(sessionId);
+    setRightPanelOpen(false);
+  }, [activeFileTabId, selectedSession?.id]);
+
+  // Toggling from the top bar. Opening with no active tab lands on the changes
+  // panel so the button is never a dead end.
+  const handleRightPanelToggle = useCallback(() => {
+    if (rightPanelOpen) {
+      closeRightPanel();
+      return;
+    }
+    if (isMobile) {
+      setSidebarOpen(false);
+      setActiveTopPanel(null);
+      setMobileToolbarMoreOpen(false);
+    }
+    if (!activeFileTabId) setActiveFileTabId(CHANGES_TAB_ID);
+    setRightPanelOpen(true);
+  }, [rightPanelOpen, closeRightPanel, activeFileTabId, isMobile]);
+
   const handleOpenFile = useCallback((
     filePath: string,
     fileName: string,
@@ -1104,6 +1154,33 @@ export function AppShell() {
   const handleOpenLinkedFile = useCallback((filePath: string, page?: number) => {
     handleOpenFile(filePath, getFileName(filePath), { sourceSessionId: selectedSession?.id ?? null, page });
   }, [handleOpenFile, selectedSession?.id]);
+
+  const openChangesFileDiff = useCallback((filePath: string) => {
+    handleOpenFile(filePath, getFileName(filePath), {
+      sourceSessionId: selectedSession?.id ?? null,
+      modeHint: "diff",
+    });
+  }, [handleOpenFile, selectedSession?.id]);
+
+  // Codex/Claude-Code style auto-open: the first time this session turns up
+  // changed files, reveal the changes panel — but only once per session, only on
+  // a wide viewport, and never after the user has closed it.
+  useEffect(() => {
+    const sessionId = selectedSession?.id ?? null;
+    if (!sessionId) return;
+    if (changesAutoOpenRef.current.sessionId !== sessionId) {
+      changesAutoOpenRef.current = { sessionId, handled: false };
+    }
+    if (changesAutoOpenRef.current.handled) return;
+    if (changedFileCount === 0) return;
+    if (isMobile) return;
+    if (typeof window !== "undefined" && window.innerWidth < CHANGES_AUTO_OPEN_MIN_WIDTH) return;
+    changesAutoOpenRef.current.handled = true;
+    if (rightPanelOpen) return;
+    if (changesDismissedRef.current.has(sessionId)) return;
+    setActiveFileTabId(CHANGES_TAB_ID);
+    setRightPanelOpen(true);
+  }, [changedFileCount, selectedSession?.id, isMobile, rightPanelOpen]);
 
   const handleOpenTerminal = useCallback((cwd: string) => {
     const existing = terminalTabs.find((tab) => tab.cwd === cwd);
@@ -2436,7 +2513,7 @@ export function AppShell() {
       <div
         aria-hidden="true"
         className={`right-panel-overlay-backdrop${rightPanelOpen ? " is-open" : ""}`}
-        onClick={() => setRightPanelOpen(false)}
+        onClick={closeRightPanel}
       />
       {rightPanelOpen && (
         <div
@@ -2472,6 +2549,38 @@ export function AppShell() {
           background: "var(--bg-panel)",
           borderBottom: "1px solid var(--border)",
         }}>
+          <button
+            type="button"
+            onClick={openChangesPanel}
+            aria-pressed={activeFileTabId === CHANGES_TAB_ID}
+            aria-controls="file-panel"
+            title={translate("changes.title")}
+            style={{
+              display: "flex", alignItems: "center", gap: 6,
+              height: "100%", padding: "0 10px", flexShrink: 0,
+              border: "none", borderRight: "1px solid var(--border)",
+              background: activeFileTabId === CHANGES_TAB_ID ? "var(--bg)" : "var(--bg-panel)",
+              color: activeFileTabId === CHANGES_TAB_ID ? "var(--text)" : "var(--text-muted)",
+              fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", userSelect: "none",
+              transition: "background 0.1s, color 0.1s",
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="18" r="2.5" />
+              <path d="M6 8.5V18a2 2 0 0 0 2 2h7.5" /><path d="M18 15.5V6a2 2 0 0 0-2-2H8.5" />
+            </svg>
+            <span>{translate("changes.title")}</span>
+            {changedFileCount > 0 && (
+              <span style={{
+                minWidth: 16, height: 16, padding: "0 4px", borderRadius: 8,
+                background: "var(--bg-hover)", color: "var(--text)",
+                fontSize: 11, fontFamily: "var(--font-mono)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                {changedFileCount}
+              </span>
+            )}
+          </button>
           <div style={{ flex: 1, overflow: "hidden" }}>
             <TabBar
               tabs={panelTabs}
@@ -2497,7 +2606,7 @@ export function AppShell() {
           </button>
           <button
             type="button"
-            onClick={() => setRightPanelOpen(false)}
+            onClick={closeRightPanel}
             aria-controls="file-panel"
             aria-expanded={rightPanelOpen}
             title={translate("files.hidePanel")}
@@ -2519,7 +2628,17 @@ export function AppShell() {
 
         {/* Only the active viewer is mounted. Lightweight per-tab state is restored on activation. */}
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
-          {activeFileTab?.filePath ? (
+          {activeFileTabId === CHANGES_TAB_ID ? (
+            <ChangesPanel
+              cwd={activeCwd}
+              status={gitChanges.status}
+              loading={gitChanges.loading}
+              error={gitChanges.error}
+              revision={gitChanges.revision}
+              onRefresh={gitChanges.refresh}
+              onOpenFile={openChangesFileDiff}
+            />
+          ) : activeFileTab?.filePath ? (
             <FileViewer
               key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
               filePath={activeFileTab.filePath}
