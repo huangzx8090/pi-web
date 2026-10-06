@@ -4,44 +4,48 @@ import test from "node:test";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
-const { getSessionListIndices, getVisibleProjectFamilies } = await jiti.import("./SessionSidebar.tsx");
+const { getSessionListIndices, getVisibleProjectFamilies, SESSION_LIST_ITEM_HEIGHT } = await jiti.import("./SessionSidebar.tsx");
 
 const source = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
 const globalStyles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 const sessionItemSource = source.slice(source.indexOf("function SessionItem("));
 
 test("scrolling keeps the focused session and the viewport mounted without expanding the whole window", () => {
+  // 期望值由行高推导，改密度时会在这里显式失败一次，逼着同步核对：
+  // 335px 视口 → ceil(335 / SESSION_LIST_ITEM_HEIGHT) + overscan(8) * 2 = 27 行，
+  // 被钉住的 focusedIndex 不在窗口内时再多挂 1 行。
   for (const [scrollTop, focusedIndex] of [[0, 1999], [10000, 0]]) {
     const indices = getSessionListIndices(2000, scrollTop, 335, focusedIndex);
-    const firstVisible = Math.floor(scrollTop / 54);
-    const lastVisible = Math.ceil((scrollTop + 335) / 54) - 1;
+    const firstVisible = Math.floor(scrollTop / SESSION_LIST_ITEM_HEIGHT);
+    const lastVisible = Math.ceil((scrollTop + 335) / SESSION_LIST_ITEM_HEIGHT) - 1;
     for (let index = firstVisible; index <= lastVisible; index++) assert.ok(indices.includes(index));
     assert.ok(indices.includes(focusedIndex));
-    assert.equal(indices.length, 24);
+    assert.equal(indices.length, 28);
     assert.equal(new Set(indices).size, indices.length);
     assert.deepEqual(indices, [...indices].sort((a, b) => a - b));
   }
-  assert.equal(getSessionListIndices(2000, 0, 335, 3).length, 23);
+  assert.equal(getSessionListIndices(2000, 0, 335, 3).length, 27);
   const blurred = getSessionListIndices(2000, 10000, 335);
-  assert.equal(blurred.length, 23);
+  assert.equal(blurred.length, 27);
   assert.ok(!blurred.includes(0));
 });
 
 test("session windows stay valid after a project shrinks and before the viewport is measured", () => {
   assert.deepEqual(getSessionListIndices(5, 80000, 335, 1999), [0, 1, 2, 3, 4]);
   assert.deepEqual(getSessionListIndices(0, 80000, 335, 1999), []);
-  assert.equal(getSessionListIndices(2000, 0, 0).length, 28);
+  // 视口还没测量时回退到 600px：ceil(600 / 32) + 16 = 35。
+  assert.equal(getSessionListIndices(2000, 0, 0).length, 35);
 });
 
-test("projects show at most the five most recent conversations by default", () => {
-  const families = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ root: n }));
+test("projects show at most the eight most recent conversations by default", () => {
+  const families = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => ({ root: n }));
   assert.deepEqual(
     getVisibleProjectFamilies(families, { isExpanded: true, showAll: false }).map((f) => f.root),
-    [1, 2, 3, 4, 5],
+    [1, 2, 3, 4, 5, 6, 7, 8],
   );
   assert.deepEqual(
     getVisibleProjectFamilies(families, { isExpanded: true, showAll: true }).map((f) => f.root),
-    [1, 2, 3, 4, 5, 6, 7, 8],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
   );
   assert.deepEqual(getVisibleProjectFamilies(families, { isExpanded: false, showAll: true }), []);
   assert.equal(getVisibleProjectFamilies(families.slice(0, 3), { isExpanded: true, showAll: false }).length, 3);
@@ -119,9 +123,16 @@ test("includes project activity counts in accessible labels", () => {
 });
 
 test("formats session timestamps with the active locale", () => {
-  assert.match(source, /import \{ formatRelativeTime \} from "@\/lib\/i18n\/format"/);
+  assert.match(source, /import \{ formatCompactRelativeTime, formatRelativeTime \} from "@\/lib\/i18n\/format"/);
   assert.match(sessionItemSource, /const \{ locale, t \} = useI18n\(\)/);
   assert.match(sessionItemSource, /formatRelativeTime\(session\.modified, locale\)/);
+  // 行右侧常显的「多久以前」用紧凑样式，且必须落在固定宽度的槽里，
+  // 否则鼠标划过时标题会跟着重排。
+  assert.match(sessionItemSource, /formatCompactRelativeTime\(session\.modified, locale\)/);
+  assert.match(sessionItemSource, /width: SESSION_ROW_TRAILING_WIDTH/);
+  assert.match(source, /const SESSION_ROW_TRAILING_WIDTH = \d+;/);
+  assert.match(sessionItemSource, /position: "absolute"[\s\S]*?right: 6,/);
+  assert.match(sessionItemSource, /background: rowBackground/);
 });
 
 test("does not persist an unchanged fallback title ending in whitespace", () => {

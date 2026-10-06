@@ -8,7 +8,7 @@ import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib/project-groups";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
-import { formatRelativeTime } from "@/lib/i18n/format";
+import { formatCompactRelativeTime, formatRelativeTime } from "@/lib/i18n/format";
 import { useI18n } from "@/hooks/useI18n";
 import { useResizablePanel } from "@/hooks/useResizablePanel";
 import { DirectoryPicker } from "./DirectoryPicker";
@@ -21,10 +21,21 @@ import { SessionSearch } from "./SessionSearch";
 
 // Fixed row height for the session list. SessionItem renders at exactly this
 // height, so the list can be windowed (only the visible slice is mounted).
-const SESSION_LIST_ITEM_HEIGHT = 54;
+// Exported so the windowing tests derive their expectations from the real row
+// height instead of a duplicated magic number.
+export const SESSION_LIST_ITEM_HEIGHT = 32;
+
+/**
+ * 每行右侧预留的固定宽度：放「多久以前」。hover 时会被操作按钮浮层盖住，
+ * 但始终占着同一个宽度，所以鼠标划过列表时标题不会重排。
+ */
+const SESSION_ROW_TRAILING_WIDTH = 52;
+
+/** 悬停操作按钮的尺寸（行高 32，留出上下各 5px 余量）。 */
+const ROW_ACTION_SIZE = 22;
 
 /** 一个项目默认最多显示最近使用的对话数（Codex 风格），其余可展开。 */
-const PROJECT_COLLAPSE_LIMIT = 5;
+const PROJECT_COLLAPSE_LIMIT = 8;
 
 /** 取路径最后一段作为项目名（完整路径放在 title 里）。 */
 function projectLabelOf(root: string): string {
@@ -2171,7 +2182,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         {/* Pinned conversations (drag to reorder) */}
         {!loading && !error && pinnedSessionList.length > 0 && (
           <div style={{ borderBottom: "1px solid var(--border)" }}>
-            <div style={{ padding: "8px 10px 2px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
+            <div style={{ padding: "6px 10px 2px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
               {t("sidebar.pinned")}
             </div>
             {pinnedSessionList.map((s) => (
@@ -2213,7 +2224,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         {/* Running conversations */}
         {!loading && !error && runningSessionList.length > 0 && (
           <div style={{ borderBottom: "1px solid var(--border)" }}>
-            <div style={{ padding: "8px 10px 2px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
+            <div style={{ padding: "6px 10px 2px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
               {t("sidebar.running")}
             </div>
             {runningSessionList.map((s) => (
@@ -2233,7 +2244,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           </div>
         )}
         {!loading && !error && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 10px 4px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px 3px" }}>
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
               {t("sidebar.projects")}
             </span>
@@ -2334,7 +2345,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   display: "flex",
                   alignItems: "center",
                   gap: 6,
-                  padding: "8px 10px",
+                  padding: "5px 10px",
                   cursor: "pointer",
                   color: isSelectedProject ? "var(--text)" : "var(--text-muted)",
                   background: isSelectedProject || projectHovered ? "var(--bg-hover)" : "none",
@@ -2500,7 +2511,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     display: "block",
                     width: "100%",
                     textAlign: "left",
-                    padding: "2px 10px 9px 36px",
+                    padding: "1px 10px 5px 24px",
                     border: "none",
                     background: "none",
                     color: "var(--text-dim)",
@@ -2521,7 +2532,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     gap: 4,
                     width: "100%",
                     textAlign: "left",
-                    padding: "2px 10px 8px 34px",
+                    padding: "1px 10px 5px 24px",
                     border: "none",
                     background: "none",
                     color: "var(--text-dim)",
@@ -2543,7 +2554,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         {/* Recent conversations (conversation-level) */}
         {!loading && !error && recentSessionList.length > 0 && (
           <div style={{ borderTop: "1px solid var(--border)", marginTop: 4 }}>
-            <div style={{ padding: "8px 10px 2px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
+            <div style={{ padding: "6px 10px 2px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
               {t("sidebar.recent")}
             </div>
             {recentSessionList.map((s) => (
@@ -2847,11 +2858,13 @@ function RowActionButton({
   onClick,
   title,
   active = false,
+  size = ROW_ACTION_SIZE,
   children,
 }: {
   onClick: (event: React.MouseEvent) => void;
   title: string;
   active?: boolean;
+  size?: number;
   children: ReactNode;
 }) {
   return (
@@ -2864,8 +2877,8 @@ function RowActionButton({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        width: 26,
-        height: 26,
+        width: size,
+        height: size,
         padding: 0,
         flexShrink: 0,
         background: active ? "var(--bg-selected)" : "none",
@@ -3021,6 +3034,12 @@ function SessionItem({
     e.stopPropagation();
   }, [onRenamed, session.cwd, session.id, session.name, session.path]);
 
+  // 行的底色被 hover 操作浮层复用它自己的底色 —— 浮层盖在行上时看不出接缝，
+  // 同时因为浮层是绝对定位，鼠标划过列表不会让标题重排。
+  const rowBackground = confirmDelete
+    ? "rgba(239,68,68,0.06)"
+    : isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent";
+
   // Fixed-height outer wrapper — content swaps in place so the list never reflows
   return (
     <div
@@ -3029,21 +3048,20 @@ function SessionItem({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); }}
       style={{
+        position: "relative",
         height: SESSION_LIST_ITEM_HEIGHT,
         display: "flex",
         alignItems: "center",
-        paddingLeft: 14 + indent * 22 + depth * 12,
+        paddingLeft: 10 + indent * 14 + depth * 10,
         paddingRight: 8,
         cursor: confirmDelete || renaming ? "default" : "pointer",
-        background: confirmDelete
-          ? "rgba(239,68,68,0.06)"
-          : isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
+        background: rowBackground,
         borderLeft: confirmDelete
           ? "2px solid #ef4444"
           : isSelected ? "2px solid var(--accent)" : "2px solid transparent",
         transition: "background 0.1s",
         opacity: deleting ? 0.5 : 1,
-        gap: 6,
+        gap: 5,
         overflow: "hidden",
       }}
     >
@@ -3058,10 +3076,10 @@ function SessionItem({
               onClick={handleDeleteConfirm}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                height: 30, padding: "0 11px",
+                height: 22, padding: "0 8px",
                 background: "#ef4444", border: "none",
                 borderRadius: 6, color: "#fff",
-                cursor: "pointer", fontSize: 12, fontWeight: 600,
+                cursor: "pointer", fontSize: 11, fontWeight: 600,
                 whiteSpace: "nowrap",
               }}
             >
@@ -3077,10 +3095,10 @@ function SessionItem({
               onClick={handleDeleteCancel}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center",
-                height: 30, padding: "0 11px",
+                height: 22, padding: "0 8px",
                 background: "var(--bg)", border: "1px solid var(--border)",
                 borderRadius: 6, color: "var(--text-muted)",
-                cursor: "pointer", fontSize: 12, fontWeight: 500,
+                cursor: "pointer", fontSize: 11, fontWeight: 500,
                 whiteSpace: "nowrap",
               }}
             >
@@ -3103,18 +3121,39 @@ function SessionItem({
           style={{
             flex: 1,
             fontSize: 12,
-            padding: "5px 8px",
+            padding: "2px 8px",
             border: "1px solid var(--accent)",
             borderRadius: 5,
             outline: "none",
             background: "var(--bg)",
             color: "var(--text)",
-            height: 30,
+            height: 22,
           }}
         />
       ) : (
         /* ── Normal view ── */
         <>
+          {/* Disclosure toggle sits on the LEFT, like a file tree — the right
+              edge is reserved for the age and the hover actions. */}
+          {hasChildren && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggleCollapse?.(); }}
+              title={t(collapsed ? "sidebar.expandSubagents" : "sidebar.collapseSubagents")}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 14, height: 14, padding: 0, flexShrink: 0,
+                background: "none", border: "none",
+                color: "var(--text-dim)", cursor: "pointer",
+                transform: collapsed ? "rotate(-90deg)" : "none",
+                transition: "transform 0.15s",
+              }}
+            >
+              <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="2 3.5 5 6.5 8 3.5" />
+              </svg>
+            </button>
+          )}
+
           {/* Leading indicator: subagent glyph, live status, or pinned bubble */}
           {depth > 0 ? (
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
@@ -3159,29 +3198,48 @@ function SessionItem({
             {title}
           </div>
 
-          {/* Collapse toggle — always visible when has children */}
-          {hasChildren && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onToggleCollapse?.(); }}
-              title={t(collapsed ? "sidebar.expandSubagents" : "sidebar.collapseSubagents")}
+          {/* Trailing slot — fixed width, so the age stays put and the hover
+              actions can cover it without moving the title. */}
+          <div
+            style={{
+              width: SESSION_ROW_TRAILING_WIDTH,
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-end",
+            }}
+          >
+            <span
               style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                width: 20, height: 20, padding: 0, flexShrink: 0,
-                background: "none", border: "none",
-                color: "var(--text-dim)", cursor: "pointer",
-                transform: collapsed ? "rotate(-90deg)" : "none",
-                transition: "transform 0.15s",
+                fontSize: 11,
+                color: "var(--text-dim)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                fontVariantNumeric: "tabular-nums",
               }}
             >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="2 3.5 5 6.5 8 3.5" />
-              </svg>
-            </button>
-          )}
+              {formatCompactRelativeTime(session.modified, locale)}
+            </span>
+          </div>
 
-          {/* Hover actions — compact, borderless */}
+          {/* Hover actions — one floating cluster drawn on the row's own
+              background. Absolutely positioned so the title and the age keep
+              their layout and nothing reflows as the pointer moves. */}
           {!session.transient && hovered && (
-            <div style={{ display: "flex", gap: 0, flexShrink: 0 }}>
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                bottom: 0,
+                right: 6,
+                display: "flex",
+                alignItems: "center",
+                gap: 0,
+                paddingLeft: 10,
+                background: rowBackground,
+              }}
+            >
               {onToggleArchive && (
                 <RowActionButton
                   onClick={(e) => { e.stopPropagation(); onToggleArchive(); }}

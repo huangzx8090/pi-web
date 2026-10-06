@@ -45,6 +45,31 @@ export function translateMessage(
  * @returns locale-aware 的相对时间文本
  */
 export function formatRelativeTime(date: Date | string, locale: Locale, now = new Date()): string {
+  const { value, unit } = relativeTimeParts(date, now);
+  return new Intl.RelativeTimeFormat(locale, { numeric: "always" }).format(value, unit);
+}
+
+/**
+ * 与 {@link formatRelativeTime} 同一套时间刻度，但用 `narrow` 样式输出短文本，
+ * 供侧边栏这种窄列使用（英文从 "3 minutes ago" 缩到 "3m ago"；中文基本不变）。
+ * @param date 要格式化的时间
+ * @param locale 当前语言
+ * @param now 用于测试或特殊场景的当前时间
+ * @returns 适合窄列显示的相对时间文本
+ */
+export function formatCompactRelativeTime(date: Date | string, locale: Locale, now = new Date()): string {
+  const { value, unit } = relativeTimeParts(date, now);
+  return new Intl.RelativeTimeFormat(locale, { numeric: "always", style: "narrow" }).format(value, unit);
+}
+
+/**
+ * 把时间差归一到「相对时间的数值 + 单位」。两个格式化函数共用它，
+ * 保证 compact 与非 compact 版本落在同一个刻度上，不会出现一个说"分钟"另一个说"小时"。
+ */
+function relativeTimeParts(
+  date: Date | string,
+  now: Date,
+): { value: number; unit: Intl.RelativeTimeFormatUnit } {
   const target = date instanceof Date ? date : new Date(date);
   const diffMs = target.getTime() - now.getTime();
   const absMs = Math.abs(diffMs);
@@ -55,6 +80,5 @@ export function formatRelativeTime(date: Date | string, locale: Locale, now = ne
       : absMs < 86_400_000
         ? ["hour", 3_600_000]
         : ["day", 86_400_000];
-  const value = Math.round(diffMs / divisor);
-  return new Intl.RelativeTimeFormat(locale, { numeric: "always" }).format(value, unit as Intl.RelativeTimeFormatUnit);
+  return { value: Math.round(diffMs / divisor), unit: unit as Intl.RelativeTimeFormatUnit };
 }
