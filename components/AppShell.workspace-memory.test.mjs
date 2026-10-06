@@ -9,6 +9,15 @@ const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8"
 const jiti = createJiti(import.meta.url);
 const draftStore = await jiti.import("../lib/draft-store.ts");
 
+// The harnessed callbacks close over the module-level pseudo tab ids, so the
+// sandbox needs them too. Read them from the source instead of duplicating the
+// literals here.
+const tabIdConstants = Object.fromEntries(
+  [...source.matchAll(/^const (CHANGES_TAB_ID|CHAT_TAB_ID) = "([^"]+)";$/gm)]
+    .map(([, name, value]) => [name, value]),
+);
+assert.deepEqual(Object.keys(tabIdConstants).sort(), ["CHANGES_TAB_ID", "CHAT_TAB_ID"]);
+
 function callbackBody(name, nextName) {
   const start = source.indexOf(`const ${name} = useCallback`);
   const end = source.indexOf(`\n  const ${nextName}`, start);
@@ -73,6 +82,7 @@ test("New restores the draft after session navigation and workspace auto-restore
       const response = Promise.withResolvers();
       const context = vm.createContext({
         ...draftStore,
+        ...tabIdConstants,
         crypto: globalThis.crypto,
         queueMicrotask,
         URLSearchParams,
@@ -95,7 +105,7 @@ test("New restores the draft after session navigation and workspace auto-restore
         closeEvents() {},
         isMobile: false,
         activeCwd: cwd,
-        activeFileTabId: null,
+        rightPanelTabId: null,
         newSessionCwd: cwd,
         newSessionDraftId: "initial",
         selectedSession: null,

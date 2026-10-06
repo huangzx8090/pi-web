@@ -12,6 +12,7 @@ import { FileViewer } from "./FileViewer";
 import { ChangesPanel } from "./ChangesPanel";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
+import { loadExplorerOpen, saveExplorerOpen } from "@/lib/file-explorer-state";
 import { useGitChanges } from "@/hooks/useGitChanges";
 import { SettingsPanel, SettingsSectionIcon } from "./SettingsPanel";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
@@ -77,6 +78,8 @@ const TOP_BAR_ICON_BUTTON_SIZE = 36;
 const AGENT_PANEL_WIDTH = 420;
 /** Pseudo tab id for the aggregate working-tree diff panel. */
 const CHANGES_TAB_ID = "__changes__";
+/** Pinned tab of the main editor area — the conversation itself. */
+const CHAT_TAB_ID = "__chat__";
 /** Only auto-open the changes panel when there is room to show it alongside the chat. */
 const CHANGES_AUTO_OPEN_MIN_WIDTH = 1200;
 
@@ -459,30 +462,39 @@ export function AppShell() {
     return () => ro.disconnect();
   }, [activeTopPanel, isMobile]);
 
-  // Files unmount when inactive; workspace terminals stay mounted until closed.
+  // Main editor area: the conversation plus VSCode-style file tabs. A file
+  // viewer unmounts when its tab is inactive; the chat itself must stay mounted
+  // (hidden with visibility) so streaming keeps running behind a file tab.
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
-  const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
+  const [activeContentTabId, setActiveContentTabId] = useState<string>(CHAT_TAB_ID);
+  // Right panel: the aggregated changes list plus workspace terminals. Terminals
+  // stay mounted until closed.
+  const [rightPanelTabId, setRightPanelTabId] = useState<string>(CHANGES_TAB_ID);
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [terminalsRestored, setTerminalsRestored] = useState(false);
-  const panelTabs: Tab[] = [...fileTabs, ...terminalTabs.map((tab) => ({
+  const mainTabs: Tab[] = [
+    { id: CHAT_TAB_ID, label: translate("chat.tab"), filePath: "", kind: "chat", closable: false },
+    ...fileTabs,
+  ];
+  const rightPanelTabs: Tab[] = terminalTabs.map((tab) => ({
     id: tab.id,
     label: getFileName(tab.cwd) || tab.cwd,
     filePath: tab.cwd,
     kind: "terminal" as const,
     closing: Boolean(tab.closing),
-  }))];
+  }));
 
   useEffect(() => {
     try {
       const saved = restoreTerminalTabs(window.sessionStorage.getItem(TERMINAL_TABS_KEY));
       setTerminalTabs(saved.tabs);
       if (saved.activeId) {
-        setActiveFileTabId(saved.activeId);
+        setRightPanelTabId(saved.activeId);
         setRightPanelOpen(saved.open);
       } else if (saved.open) {
-        // The panel was left open with no file tab — land on the changes panel
-        // instead of an empty "no file open" view.
-        setActiveFileTabId(CHANGES_TAB_ID);
+        // The panel was left open with nothing but files in it — land on the
+        // changes panel instead of an empty view.
+        setRightPanelTabId(CHANGES_TAB_ID);
         setRightPanelOpen(true);
       }
     } catch { /* storage is optional */ }
@@ -494,11 +506,33 @@ export function AppShell() {
     try {
       window.sessionStorage.setItem(TERMINAL_TABS_KEY, JSON.stringify({
         tabs: terminalTabs.map(({ id, cwd }) => ({ id, cwd })),
-        activeId: activeFileTabId,
+        activeId: rightPanelTabId,
         open: rightPanelOpen,
       }));
     } catch { /* storage is optional */ }
-  }, [terminalTabs, activeFileTabId, rightPanelOpen, terminalsRestored]);
+  }, [terminalTabs, rightPanelTabId, rightPanelOpen, terminalsRestored]);
+
+  // The file tree lives in the sidebar but is toggled from the top toolbar, so
+  // the shell owns the flag and persists it (same preference the sidebar arrow
+  // used to store on its own).
+  const [explorerOpen, setExplorerOpen] = useState(true);
+  useEffect(() => {
+    setExplorerOpen(loadExplorerOpen());
+  }, []);
+  const handleExplorerOpenChange = useCallback((open: boolean) => {
+    saveExplorerOpen(open);
+    setExplorerOpen(open);
+  }, []);
+  const handleExplorerToggle = useCallback(() => {
+    // With the sidebar hidden there is no tree on screen, so the first press
+    // reveals the sidebar and the tree together.
+    if (!sidebarOpen) {
+      setSidebarOpen(true);
+      handleExplorerOpenChange(true);
+      return;
+    }
+    handleExplorerOpenChange(!explorerOpen);
+  }, [sidebarOpen, explorerOpen, handleExplorerOpenChange]);
 
   const handleFileViewerStateChange = useCallback((
     tabId: string,
@@ -737,8 +771,9 @@ export function AppShell() {
       // File tabs are keyed by absolute path, so tabs opened in the previous
       // project must not linger. Same-project worktree switches keep them.
       setFileTabs([]);
-      if (!activeFileTabId || activeFileTabId.startsWith("file:")) {
-        setActiveFileTabId(null);
+      setActiveContentTabId(CHAT_TAB_ID);
+      if (!rightPanelTabId || rightPanelTabId === CHANGES_TAB_ID) {
+        setRightPanelTabId(CHANGES_TAB_ID);
         setRightPanelOpen(false);
       }
       // Restore the workspace we switched to: its last open session, or keep
@@ -746,7 +781,7 @@ export function AppShell() {
       restoreWorkspaceContext(newProject, cwd);
     }
     router.replace(typeof window !== "undefined" ? window.location.pathname : "/", { scroll: false });
-  }, [activeCwd, activeFileTabId, invalidateWorkspaceRestore, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
+  }, [activeCwd, rightPanelTabId, invalidateWorkspaceRestore, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
 
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false, entryId?: string, blockIndex?: number) => {
     setSearchTarget(entryId ? { sessionId: session.id, entryId, blockIndex } : null);
@@ -761,8 +796,9 @@ export function AppShell() {
     const projectKey = workspaceKeyOf(session);
     if (activeProjectKeyRef.current !== projectKey) {
       setFileTabs([]);
-      if (!activeFileTabId || activeFileTabId.startsWith("file:")) {
-        setActiveFileTabId(null);
+      setActiveContentTabId(CHAT_TAB_ID);
+      if (!rightPanelTabId || rightPanelTabId === CHANGES_TAB_ID) {
+        setRightPanelTabId(CHANGES_TAB_ID);
         setRightPanelOpen(false);
       }
       setActiveTopPanel(null);
@@ -804,7 +840,7 @@ export function AppShell() {
     if (!isRestore || new URLSearchParams(window.location.search).get("session") !== session.id) {
       router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
     }
-  }, [activeCwd, activeFileTabId, invalidateWorkspaceRestore, router, isMobile, newSessionCwd, selectedSession]);
+  }, [activeCwd, rightPanelTabId, invalidateWorkspaceRestore, router, isMobile, newSessionCwd, selectedSession]);
 
   const handleNewSession = useCallback((sessionId: string, cwd: string) => {
     invalidateWorkspaceRestore();
@@ -1103,7 +1139,7 @@ export function AppShell() {
   }, [invalidateWorkspaceRestore, selectedSession, router]);
 
   const openChangesPanel = useCallback(() => {
-    setActiveFileTabId(CHANGES_TAB_ID);
+    setRightPanelTabId(CHANGES_TAB_ID);
     setRightPanelOpen(true);
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
@@ -1112,9 +1148,9 @@ export function AppShell() {
   // this session, and stops the auto-open effect from popping it back up.
   const closeRightPanel = useCallback(() => {
     const sessionId = selectedSession?.id ?? null;
-    if (sessionId && activeFileTabId === CHANGES_TAB_ID) changesDismissedRef.current.add(sessionId);
+    if (sessionId && rightPanelTabId === CHANGES_TAB_ID) changesDismissedRef.current.add(sessionId);
     setRightPanelOpen(false);
-  }, [activeFileTabId, selectedSession?.id]);
+  }, [rightPanelTabId, selectedSession?.id]);
 
   // Toggling from the top bar. Opening with no active tab lands on the changes
   // panel so the button is never a dead end.
@@ -1128,9 +1164,9 @@ export function AppShell() {
       setActiveTopPanel(null);
       setMobileToolbarMoreOpen(false);
     }
-    if (!activeFileTabId) setActiveFileTabId(CHANGES_TAB_ID);
+    if (!rightPanelTabId) setRightPanelTabId(CHANGES_TAB_ID);
     setRightPanelOpen(true);
-  }, [rightPanelOpen, closeRightPanel, activeFileTabId, isMobile]);
+  }, [rightPanelOpen, closeRightPanel, rightPanelTabId, isMobile]);
 
   const handleOpenFile = useCallback((
     filePath: string,
@@ -1149,10 +1185,14 @@ export function AppShell() {
       sourceSessionId,
       tabId,
     }));
-    setActiveFileTabId(tabId);
-    setRightPanelOpen(true);
-    // On mobile the file panel is full-screen; close the drawer so it shows.
-    if (isMobile) setSidebarOpen(false);
+    // Files open as a tab in the middle, next to the conversation.
+    setActiveContentTabId(tabId);
+    // A full-width right panel would hide the tab we just opened.
+    setRightPanelExpanded(false);
+    if (isMobile) {
+      setSidebarOpen(false);
+      setRightPanelOpen(false);
+    }
   }, [isMobile]);
 
   const handleOpenLinkedFile = useCallback((filePath: string, page?: number) => {
@@ -1182,7 +1222,7 @@ export function AppShell() {
     changesAutoOpenRef.current.handled = true;
     if (rightPanelOpen) return;
     if (changesDismissedRef.current.has(sessionId)) return;
-    setActiveFileTabId(CHANGES_TAB_ID);
+    setRightPanelTabId(CHANGES_TAB_ID);
     setRightPanelOpen(true);
   }, [changedFileCount, selectedSession?.id, isMobile, rightPanelOpen]);
 
@@ -1190,7 +1230,7 @@ export function AppShell() {
     const existing = terminalTabs.find((tab) => tab.cwd === cwd);
     const tab = existing ?? newTerminalTab(cwd);
     if (!existing) setTerminalTabs((tabs) => [...tabs, tab]);
-    setActiveFileTabId(tab.id);
+    setRightPanelTabId(tab.id);
     setRightPanelOpen(true);
     if (isMobile) setSidebarOpen(false);
   }, [terminalTabs, isMobile]);
@@ -1199,24 +1239,24 @@ export function AppShell() {
     const replacement = tab.closing === "restart" ? newTerminalTab(tab.cwd) : null;
     const remaining = terminalTabs.filter((item) => item.id !== tab.id);
     setTerminalTabs((tabs) => tabs.flatMap((item) => item.id !== tab.id ? [item] : replacement ? [replacement] : []));
-    setActiveFileTabId((current) => current !== tab.id ? current : replacement?.id ?? remaining.at(-1)?.id ?? fileTabs.at(-1)?.id ?? null);
-    if (!replacement && !remaining.length && !fileTabs.length) setRightPanelOpen(false);
+    // Only the terminal the panel was showing can leave the panel empty; a
+    // background terminal exiting must not close what the user is looking at.
+    if (rightPanelTabId !== tab.id) return;
+    setRightPanelTabId(replacement?.id ?? remaining.at(-1)?.id ?? CHANGES_TAB_ID);
+    if (!replacement && !remaining.length) setRightPanelOpen(false);
   };
 
   const handleCloseFileTab = useCallback((tabId: string) => {
+    // Terminal ids belong to the right panel; file ids to the main editor area.
     if (terminalTabs.some((tab) => tab.id === tabId)) {
       setTerminalTabs((tabs) => tabs.map((tab) => tab.id === tabId && !tab.closing ? { ...tab, closing: "close" } : tab));
       return;
     }
-    setFileTabs((prev) => {
-      const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0 && terminalTabs.length === 0) setRightPanelOpen(false);
-      return next;
-    });
-    setActiveFileTabId((cur) => {
+    setFileTabs((prev) => prev.filter((t) => t.id !== tabId));
+    setActiveContentTabId((cur) => {
       if (cur !== tabId) return cur;
       const remaining = fileTabs.filter((t) => t.id !== tabId);
-      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? null;
+      return remaining.at(-1)?.id ?? CHAT_TAB_ID;
     });
   }, [fileTabs, terminalTabs]);
 
@@ -1287,7 +1327,8 @@ export function AppShell() {
     }
   }, [projectTrustBusy, projectTrustCwd]);
 
-  const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
+  const activeFileTab = fileTabs.find((tab) => tab.id === activeContentTabId) ?? null;
+  const fileTabActive = activeFileTab !== null && Boolean(activeFileTab.filePath);
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
 
@@ -1319,6 +1360,8 @@ export function AppShell() {
         onOpenTerminal={handleOpenTerminal}
         explorerRefreshKey={explorerRefreshKey}
         onExplorerRefresh={handleExplorerRefresh}
+        explorerOpen={explorerOpen}
+        onExplorerOpenChange={handleExplorerOpenChange}
         onAtMention={handleAtMention}
         onAtMentions={handleAtMentions}
         onBackgroundTaskDone={handleBackgroundTaskDone}
@@ -1923,6 +1966,37 @@ export function AppShell() {
     );
   };
 
+  // The file tree lives in the sidebar; this is its entry point in the toolbar.
+  const renderExplorerToggle = () => {
+    const active = sidebarOpen && explorerOpen;
+    const label = active ? translate("files.hideExplorer") : translate("files.showExplorer");
+    return (
+      <button
+        type="button"
+        onClick={handleExplorerToggle}
+        aria-controls="session-sidebar"
+        aria-expanded={active}
+        title={label}
+        aria-label={label}
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "center",
+          width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
+          background: active ? "var(--bg-selected)" : "none",
+          border: "none", borderRight: "1px solid var(--border)",
+          color: active ? "var(--text)" : "var(--text-muted)",
+          cursor: "pointer", flexShrink: 0, transition: "color 0.12s, background 0.12s",
+        }}
+        onMouseEnter={(event) => { event.currentTarget.style.color = "var(--text)"; }}
+        onMouseLeave={(event) => { event.currentTarget.style.color = active ? "var(--text)" : "var(--text-muted)"; }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3 6a2 2 0 0 1 2-2h3.2l1.8 2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+          <path d="M9 12h6M9 15.5h4" />
+        </svg>
+      </button>
+    );
+  };
+
   return (
     <>
     <style>{`
@@ -2092,6 +2166,7 @@ export function AppShell() {
               </svg>
             )}
           </button>
+          {renderExplorerToggle()}
           {isMobile && (
             <div
               ref={mobileToolbarRef}
@@ -2433,43 +2508,67 @@ export function AppShell() {
         {isMobile && renderProjectTrustWarning(true)}
         </div>
 
+        {/* Main editor tabs — the conversation plus every open file (VSCode-style) */}
+        {fileTabs.length > 0 && (
+          <div style={{ flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)" }}>
+            <TabBar
+              tabs={mainTabs}
+              activeTabId={activeContentTabId}
+              onSelectTab={setActiveContentTabId}
+              onCloseTab={handleCloseFileTab}
+            />
+          </div>
+        )}
+
         {/* Chat content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {showChat ? (
-            <ChatWindow
-              key={sessionKey}
-              session={selectedSession}
-              searchTarget={searchTarget?.sessionId === selectedSession?.id ? searchTarget : null}
-              onSearchTargetHandled={handleSearchTargetHandled}
-              initialScrollPosition={selectedSession ? sessionScrollPositionsRef.current.get(selectedSession.id) ?? null : null}
-              onScrollPositionChange={handleSessionScrollPositionChange}
-              sessionRunning={Boolean(selectedSession && runningSessionIds.has(selectedSession.id))}
-              newSessionCwd={effectiveNewSessionCwd}
-              newSessionDraftKey={newSessionDraftKey}
-              onAgentEnd={handleAgentEnd}
-              onAttentionNeeded={handleAttentionNeeded}
-              onSessionCreated={handleSessionCreated}
-              onSessionForked={handleSessionForked}
-              modelsRefreshKey={modelsRefreshKey}
-              chatInputRef={chatInputRef}
-              onBranchDataChange={handleBranchDataChange}
-              onSystemPromptChange={handleSystemPromptChange}
-              onSystemToolsChange={handleSystemToolsChange}
-              onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
-              onSessionStatsChange={handleSessionStatsChange}
-              onSessionStatsPanelOpen={openSessionStatsPanel}
-              onContextUsageChange={handleContextUsageChange}
-              onOpenFile={handleOpenLinkedFile}
-              onOpenSession={handleOpenSession}
-              onAskInNewChat={handleAskInNewChat}
-              quoteSelectionEnabled={quoteSelectionEnabled}
-              initialPrompt={pendingQuotePrompt?.sessionId === selectedSession?.id ? pendingQuotePrompt?.text : undefined}
-              onInitialPromptConsumed={() => setPendingQuotePrompt(null)}
-              soundEnabled={soundEnabled}
-              onSoundToggle={onSoundToggle}
-              playDoneSound={playDoneSound}
-              unlockAudio={unlockAudio}
-            />
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                flexDirection: "column",
+                // The conversation keeps streaming while a file tab is in front,
+                // so it is hidden with visibility instead of being unmounted.
+                visibility: fileTabActive ? "hidden" : "visible",
+              }}
+            >
+              <ChatWindow
+                key={sessionKey}
+                session={selectedSession}
+                searchTarget={searchTarget?.sessionId === selectedSession?.id ? searchTarget : null}
+                onSearchTargetHandled={handleSearchTargetHandled}
+                initialScrollPosition={selectedSession ? sessionScrollPositionsRef.current.get(selectedSession.id) ?? null : null}
+                onScrollPositionChange={handleSessionScrollPositionChange}
+                sessionRunning={Boolean(selectedSession && runningSessionIds.has(selectedSession.id))}
+                newSessionCwd={effectiveNewSessionCwd}
+                newSessionDraftKey={newSessionDraftKey}
+                onAgentEnd={handleAgentEnd}
+                onAttentionNeeded={handleAttentionNeeded}
+                onSessionCreated={handleSessionCreated}
+                onSessionForked={handleSessionForked}
+                modelsRefreshKey={modelsRefreshKey}
+                chatInputRef={chatInputRef}
+                onBranchDataChange={handleBranchDataChange}
+                onSystemPromptChange={handleSystemPromptChange}
+                onSystemToolsChange={handleSystemToolsChange}
+                onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
+                onSessionStatsChange={handleSessionStatsChange}
+                onSessionStatsPanelOpen={openSessionStatsPanel}
+                onContextUsageChange={handleContextUsageChange}
+                onOpenFile={handleOpenLinkedFile}
+                onOpenSession={handleOpenSession}
+                onAskInNewChat={handleAskInNewChat}
+                quoteSelectionEnabled={quoteSelectionEnabled}
+                initialPrompt={pendingQuotePrompt?.sessionId === selectedSession?.id ? pendingQuotePrompt?.text : undefined}
+                onInitialPromptConsumed={() => setPendingQuotePrompt(null)}
+                soundEnabled={soundEnabled}
+                onSoundToggle={onSoundToggle}
+                playDoneSound={playDoneSound}
+                unlockAudio={unlockAudio}
+              />
+            </div>
           ) : initialCwdStatus === "validating" ? (
             <div
               role="status"
@@ -2511,6 +2610,36 @@ export function AppShell() {
               </div>
             )
           ) : null}
+          {/* Only the active file tab mounts a viewer. Lightweight per-tab state
+              lives in AppShell and is restored on activation. */}
+          {fileTabActive && activeFileTab ? (
+            <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column" }}>
+              <FileViewer
+                key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
+                filePath={activeFileTab.filePath}
+                cwd={activeCwd ?? undefined}
+                sourceSessionId={activeFileTab.sourceSessionId}
+                gitRefreshKey={explorerRefreshKey}
+                initialDisplayMode={activeFileTab.initialDisplayMode}
+                initialPage={activeFileTab.page}
+                initialState={activeFileTab.viewerState}
+                // Only watch while the tab is actually on screen.
+                watchEnabled={!rightPanelFullWidth}
+                onStateChange={(viewerState) => handleFileViewerStateChange(
+                  activeFileTab.id,
+                  activeFileTab.viewerRevision ?? 0,
+                  viewerState,
+                )}
+                onMentionLines={handleFileLineMention}
+                onAtMention={handleAtMention}
+                onOpenFile={(filePath, page) => handleOpenFile(
+                  filePath,
+                  getFileName(filePath),
+                  { sourceSessionId: activeFileTab.sourceSessionId, page },
+                )}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -2530,7 +2659,7 @@ export function AppShell() {
         />
       )}
 
-      {/* Right panel: file viewer — always mounted, width animated via CSS */}
+      {/* Right panel: changes list — always mounted, width animated via CSS */}
       <div
         ref={rightPanelResizer.panelRef}
         id="file-panel"
@@ -2556,15 +2685,15 @@ export function AppShell() {
           <button
             type="button"
             onClick={openChangesPanel}
-            aria-pressed={activeFileTabId === CHANGES_TAB_ID}
+            aria-pressed={rightPanelTabId === CHANGES_TAB_ID}
             aria-controls="file-panel"
             title={translate("changes.title")}
             style={{
               display: "flex", alignItems: "center", gap: 6,
               height: "100%", padding: "0 10px", flexShrink: 0,
               border: "none", borderRight: "1px solid var(--border)",
-              background: activeFileTabId === CHANGES_TAB_ID ? "var(--bg)" : "var(--bg-panel)",
-              color: activeFileTabId === CHANGES_TAB_ID ? "var(--text)" : "var(--text-muted)",
+              background: rightPanelTabId === CHANGES_TAB_ID ? "var(--bg)" : "var(--bg-panel)",
+              color: rightPanelTabId === CHANGES_TAB_ID ? "var(--text)" : "var(--text-muted)",
               fontSize: 12, cursor: "pointer", whiteSpace: "nowrap", userSelect: "none",
               transition: "background 0.1s, color 0.1s",
             }}
@@ -2587,9 +2716,9 @@ export function AppShell() {
           </button>
           <div style={{ flex: 1, overflow: "hidden" }}>
             <TabBar
-              tabs={panelTabs}
-              activeTabId={activeFileTabId ?? ""}
-              onSelectTab={setActiveFileTabId}
+              tabs={rightPanelTabs}
+              activeTabId={rightPanelTabId}
+              onSelectTab={setRightPanelTabId}
               onCloseTab={handleCloseFileTab}
             />
           </div>
@@ -2630,9 +2759,9 @@ export function AppShell() {
           </button>
         </div>
 
-        {/* Only the active viewer is mounted. Lightweight per-tab state is restored on activation. */}
+        {/* Right panel content: the changes list, or a workspace terminal. */}
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
-          {activeFileTabId === CHANGES_TAB_ID ? (
+          {rightPanelTabId === CHANGES_TAB_ID ? (
             <ChangesPanel
               cwd={activeCwd}
               status={gitChanges.status}
@@ -2642,40 +2771,16 @@ export function AppShell() {
               onRefresh={gitChanges.refresh}
               onOpenFile={openChangesFileDiff}
             />
-          ) : activeFileTab?.filePath ? (
-            <FileViewer
-              key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
-              filePath={activeFileTab.filePath}
-              cwd={activeCwd ?? undefined}
-              sourceSessionId={activeFileTab.sourceSessionId}
-              gitRefreshKey={explorerRefreshKey}
-              initialDisplayMode={activeFileTab.initialDisplayMode}
-              initialPage={activeFileTab.page}
-              initialState={activeFileTab.viewerState}
-              watchEnabled={rightPanelOpen}
-              onStateChange={(viewerState) => handleFileViewerStateChange(
-                activeFileTab.id,
-                activeFileTab.viewerRevision ?? 0,
-                viewerState,
-              )}
-              onMentionLines={rightPanelOpen ? handleFileLineMention : undefined}
-              onAtMention={handleAtMention}
-              onOpenFile={(filePath, page) => handleOpenFile(
-                filePath,
-                getFileName(filePath),
-                { sourceSessionId: activeFileTab.sourceSessionId, page },
-              )}
-            />
-          ) : !terminalTabs.some((tab) => tab.id === activeFileTabId) ? (
+          ) : !terminalTabs.some((tab) => tab.id === rightPanelTabId) ? (
             <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
                {translate("files.noneOpen")}
             </div>
           ) : null}
           {terminalTabs.map((tab) => (
-            <div key={tab.id} hidden={tab.id !== activeFileTabId} style={{ width: "100%", height: "100%" }}>
+            <div key={tab.id} hidden={tab.id !== rightPanelTabId} style={{ width: "100%", height: "100%" }}>
               <TerminalPanel
                 tab={tab}
-                active={rightPanelOpen && tab.id === activeFileTabId}
+                active={rightPanelOpen && tab.id === rightPanelTabId}
                 onRestart={() => setTerminalTabs((tabs) => tabs.map((item) => item.id === tab.id ? { ...item, closing: "restart" } : item))}
                 onClosed={() => handleTerminalClosed(tab)}
                 onCloseError={() => setTerminalTabs((tabs) => tabs.map((item) => item.id === tab.id ? { ...item, closing: undefined } : item))}

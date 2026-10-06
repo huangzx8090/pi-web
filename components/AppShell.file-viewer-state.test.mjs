@@ -5,8 +5,8 @@ import test from "node:test";
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
 
 function fileContentBlock() {
-  const start = source.indexOf("{/* Only the active viewer");
-  const end = source.indexOf("</div>\n      </div>\n    </div>", start);
+  const start = source.indexOf("{/* Only the active file tab mounts a viewer");
+  const end = source.indexOf("\n        </div>\n      </div>", start);
   assert.notEqual(start, -1, "file content comment not found");
   assert.notEqual(end, -1, "end of file content block not found");
   return source.slice(start, end);
@@ -14,7 +14,7 @@ function fileContentBlock() {
 
 test("only the active file tab mounts a FileViewer", () => {
   const block = fileContentBlock();
-  assert.match(block, /activeFileTab\?\.filePath \? \(/);
+  assert.match(block, /fileTabActive && activeFileTab \? \(/);
   assert.doesNotMatch(block, /fileTabs\.map\(/);
   assert.equal(block.match(/<FileViewer/g)?.length, 1);
 });
@@ -26,8 +26,10 @@ test("the active viewer restores tab state and saves it with a revision", () => 
   assert.match(block, /handleFileViewerStateChange\(\s*activeFileTab\.id,\s*activeFileTab\.viewerRevision \?\? 0,/);
 });
 
-test("closing the file panel pauses the active viewer watcher", () => {
-  assert.match(fileContentBlock(), /watchEnabled=\{rightPanelOpen\}/);
+test("the viewer only watches files while its tab is on screen", () => {
+  // The tab stays mounted behind a full-width right panel, so the watcher is
+  // gated on visibility rather than on the panel being open.
+  assert.match(fileContentBlock(), /watchEnabled=\{!rightPanelFullWidth\}/);
 });
 
 test("markdown preview links forward a PDF page fragment to the viewer", () => {

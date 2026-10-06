@@ -9,8 +9,11 @@ export interface Tab {
   id: string;
   label: string;
   filePath: string;
-  kind?: "terminal";
+  /** "chat" is the permanent conversation tab of the main editor area. */
+  kind?: "terminal" | "chat";
   closing?: boolean;
+  /** Set to false for pinned tabs (the chat tab) that cannot be closed. */
+  closable?: boolean;
   sourceSessionId?: string | null;
   initialDisplayMode?: FileViewerDisplayMode;
   /** PDF page requested by the link that opened this tab (`#page=N`). */
@@ -100,6 +103,10 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
                 </svg>
+              ) : tab.kind === "chat" ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
               ) : getFileIcon(tab.label, 13)}
             </span>
             <span
@@ -113,6 +120,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
             >
               {tab.label}
             </span>
+            {tab.closable !== false && (
             <button
               disabled={tab.closing}
               onClick={(e) => { e.stopPropagation(); onCloseTab(tab.id); }}
@@ -138,6 +146,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
                 <line x1="8" y1="2" x2="2" y2="8" />
               </svg>
             </button>
+            )}
           </div>
         );
       })}
