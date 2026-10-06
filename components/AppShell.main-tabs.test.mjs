@@ -13,22 +13,31 @@ function mainEditorBlock() {
   return source.slice(start, end);
 }
 
-test("the main editor area keeps a pinned chat tab next to the open files", () => {
-  assert.match(
-    source,
-    /const mainTabs: Tab\[\] = \[\s*\{\s*id: CHAT_TAB_ID,\s*label: translate\("chat\.tab"\),\s*filePath: "",\s*kind: "chat",\s*closable: false,?\s*\},\s*\.\.\.fileTabs,\s*\];/,
-  );
+test("the main editor area keeps pinned chat and tree tabs ahead of the open files", () => {
+  const start = source.indexOf("  const mainTabs: Tab[] = [");
+  const end = source.indexOf("  const rightPanelTabs: Tab[]", start);
+  assert.notEqual(start, -1, "mainTabs declaration not found");
+  const tabs = source.slice(start, end);
+  // Pinned views are declared in a fixed order so they never shift when files
+  // open and close; transient file tabs come last.
+  assert.match(tabs, /id: CHAT_TAB_ID, label: translate\("chat\.tab"\), filePath: "", kind: "chat", closable: false \},/);
+  assert.match(tabs, /id: EXPLORER_TAB_ID, label: translate\("files\.explorer"\), filePath: "", kind: "explorer" as const, closable: false \}/);
+  assert.ok(tabs.indexOf("CHAT_TAB_ID") < tabs.indexOf("EXPLORER_TAB_ID"));
+  assert.ok(tabs.indexOf("EXPLORER_TAB_ID") < tabs.indexOf("...fileTabs"));
+  assert.match(tabs, /\.\.\.\(explorerOpen/);
+
   const block = mainEditorBlock();
-  assert.match(block, /\{fileTabs\.length > 0 && \(/);
+  // The strip is up whenever there is a second view to switch to.
+  assert.match(block, /\{mainTabs\.length > 1 && \(/);
   assert.match(block, /<TabBar[\s\S]*?tabs=\{mainTabs\}[\s\S]*?activeTabId=\{activeContentTabId\}[\s\S]*?onSelectTab=\{setActiveContentTabId\}/);
 });
 
-test("the conversation stays mounted while a file tab is in front", () => {
+test("the conversation stays mounted while a file tab or the tree is in front", () => {
   const block = mainEditorBlock();
   // Chat is rendered whenever a session exists — hiding it must not unmount it,
   // otherwise streaming, drafts and scroll position would be lost.
   assert.match(block, /\{showChat \? \(\s*<div[\s\S]*?<ChatWindow/);
-  assert.match(block, /visibility: fileTabActive \? "hidden" : "visible"/);
+  assert.match(block, /visibility: fileTabActive \|\| explorerTabActive \? "hidden" : "visible"/);
   assert.doesNotMatch(block, /fileTabActive \? null : \(/);
 });
 
@@ -59,14 +68,58 @@ test("the right panel hosts the changes list and terminals, never file viewers",
   assert.doesNotMatch(source, /panelTabs/);
 });
 
-test("the toolbar explorer button reveals the sidebar file tree", () => {
+test("the toolbar explorer toggle moves the editor area onto the file tree", () => {
   assert.match(
     source,
-    /const handleExplorerToggle = useCallback\(\(\) => \{[\s\S]*?if \(!sidebarOpen\) \{\s*setSidebarOpen\(true\);\s*handleExplorerOpenChange\(true\);\s*return;\s*\}\s*handleExplorerOpenChange\(!explorerOpen\);/,
+    /const handleExplorerToggle = useCallback\(\(\) => \{[\s\S]*?if \(explorerOpen && activeContentTabId === EXPLORER_TAB_ID\) \{\s*handleExplorerOpenChange\(false\);[\s\S]*?setActiveContentTabId\(\(current\) => \(current === EXPLORER_TAB_ID \? CHAT_TAB_ID : current\)\);\s*return;\s*\}\s*handleExplorerOpenChange\(true\);\s*setActiveContentTabId\(EXPLORER_TAB_ID\);/,
   );
-  assert.match(source, /\{renderExplorerToggle\(\)\}/);
-  assert.match(source, /explorerOpen=\{explorerOpen\}\s*\n\s*onExplorerOpenChange=\{handleExplorerOpenChange\}/);
+  // Leaving the tree falls back to the conversation, never to an empty area.
+  const start = source.indexOf("const handleExplorerToggle");
+  const block = source.slice(start, source.indexOf("}, [explorerOpen, activeContentTabId, handleExplorerOpenChange]);", start));
+  assert.doesNotMatch(block, /setSidebarOpen/);
+  assert.match(source, /\{renderExplorerToggle\(isMobile\)\}/);
   assert.match(source, /const label = active \? translate\("files\.hideExplorer"\) : translate\("files\.showExplorer"\);/);
+});
+
+test("the sidebar toggle keeps addressing the sidebar it opens", () => {
+  // The explorer button used to carry this hook; now that it points at the tree
+  // pane, the sidebar toggle has to declare what it controls itself.
+  const start = source.indexOf("onClick={handleSidebarToggle}");
+  const button = source.slice(start, source.indexOf("</button>", start));
+  assert.match(button, /aria-controls="session-sidebar"/);
+  assert.match(button, /aria-expanded=\{sidebarOpen\}/);
+  assert.match(source, /aria-controls=\{EXPLORER_PANE_ID\}/);
+});
+
+test("the tree renders inside the editor area, not in the sidebar", () => {
+  const block = mainEditorBlock();
+  assert.match(block, /\{explorerTabActive && explorerCwd \? \(/);
+  assert.match(block, /id=\{EXPLORER_PANE_ID\}/);
+  assert.match(block, /<FileExplorerPane[\s\S]*?cwd=\{explorerCwd\}[\s\S]*?onOpenFile=\{handleOpenFile\}[\s\S]*?onRefresh=\{handleExplorerRefresh\}/);
+  assert.match(source, /import \{ FileExplorerPane \} from "\.\/FileExplorerPane";/);
+  // The tree only takes over when there is a workspace to list.
+  assert.match(source, /const explorerTabActive = explorerOpen && Boolean\(explorerCwd\) && activeContentTabId === EXPLORER_TAB_ID;/);
+
+  const sidebarStart = source.indexOf("<SessionSidebar");
+  const sidebar = source.slice(sidebarStart, source.indexOf("onSessionsChange={handleSessionsChange}", sidebarStart));
+  assert.doesNotMatch(sidebar, /explorerOpen=/);
+  assert.doesNotMatch(sidebar, /onExplorerOpenChange=/);
+  assert.doesNotMatch(sidebar, /onOpenFile=/);
+  assert.doesNotMatch(sidebar, /onOpenTerminal=/);
+});
+
+test("the explorer entry is a labelled toolbar button like its neighbours", () => {
+  const start = source.indexOf("const renderExplorerToggle = (mobile: boolean) => {");
+  const end = source.indexOf("\n  };", start);
+  assert.notEqual(start, -1, "explorer toggle renderer not found");
+  const block = source.slice(start, end);
+  // Same shape as the history / system / tools buttons: full-height, bordered
+  // label with a 12px icon, and an accent top border while active.
+  assert.match(block, /height: "100%", padding: mobile \? 0 : "0 12px"/);
+  assert.match(block, /borderTop: active \? "2px solid var\(--accent\)" : "2px solid transparent"/);
+  assert.match(block, /<svg width="12" height="12"/);
+  assert.match(block, /\{!mobile && <span>\{translate\("files\.explorer"\)\}<\/span>\}/);
+  assert.match(block, /data-mobile-toolbar-explorer=\{mobile \? "true" : undefined\}/);
 });
 
 test("switching projects returns the middle area to the conversation", () => {

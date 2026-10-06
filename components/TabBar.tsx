@@ -9,8 +9,9 @@ export interface Tab {
   id: string;
   label: string;
   filePath: string;
-  /** "chat" is the permanent conversation tab of the main editor area. */
-  kind?: "terminal" | "chat";
+  /** "chat" is the permanent conversation tab of the main editor area, and
+   *  "explorer" the pinned file-tree view next to it. */
+  kind?: "terminal" | "chat" | "explorer";
   closing?: boolean;
   /** Set to false for pinned tabs (the chat tab) that cannot be closed. */
   closable?: boolean;
@@ -106,6 +107,11 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
               ) : tab.kind === "chat" ? (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+              ) : tab.kind === "explorer" ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 6a2 2 0 0 1 2-2h3.2l1.8 2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                  <path d="M8.5 11.5h7M8.5 15h4" />
                 </svg>
               ) : getFileIcon(tab.label, 13)}
             </span>

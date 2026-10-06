@@ -84,4 +84,4 @@ Git allows a branch to be checked out in only one worktree at a time. Switch to 
 Git can keep prunable worktree records after a checkout disappears. Pi Web filters those out of the switcher.
 
 **The Explorer shows a different branch than the open chat.**
-The Explorer follows the selected worktree. The chat follows the opened session. Click the session again to move the sidebar back to that session's checkout.
+The Explorer follows the selected worktree. The chat follows the opened session. Click the session again to move the worktree selection back to that session's checkout.

@@ -9,6 +9,7 @@ import type { ChatScrollPosition } from "@/lib/chat-scroll-position";
 import { formatCost, formatCostCompact } from "@/lib/currency";
 import { shouldAutoNameSession } from "@/lib/auto-name";
 import { FileViewer } from "./FileViewer";
+import { FileExplorerPane } from "./FileExplorerPane";
 import { ChangesPanel } from "./ChangesPanel";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
@@ -80,6 +81,10 @@ const AGENT_PANEL_WIDTH = 420;
 const CHANGES_TAB_ID = "__changes__";
 /** Pinned tab of the main editor area — the conversation itself. */
 const CHAT_TAB_ID = "__chat__";
+/** Pinned tab of the main editor area — the file tree view. */
+const EXPLORER_TAB_ID = "__explorer__";
+/** DOM id of the file-tree panel of the editor area. */
+const EXPLORER_PANE_ID = "file-explorer-pane";
 /** Only auto-open the changes panel when there is room to show it alongside the chat. */
 const CHANGES_AUTO_OPEN_MIN_WIDTH = 1200;
 
@@ -472,8 +477,37 @@ export function AppShell() {
   const [rightPanelTabId, setRightPanelTabId] = useState<string>(CHANGES_TAB_ID);
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [terminalsRestored, setTerminalsRestored] = useState(false);
+  // The file tree is a view of the main editor area (it used to be a section at
+  // the bottom of the sidebar). The toolbar toggle opens/closes it and moves the
+  // editor area onto it, so one press is enough to get from chat to files.
+  const [explorerOpen, setExplorerOpen] = useState(true);
+  useEffect(() => {
+    setExplorerOpen(loadExplorerOpen());
+  }, []);
+  const handleExplorerOpenChange = useCallback((open: boolean) => {
+    saveExplorerOpen(open);
+    setExplorerOpen(open);
+  }, []);
+  const handleExplorerToggle = useCallback(() => {
+    // Three states, matching the label: in front → close, open but behind →
+    // bring to front, closed → open and show it.
+    if (explorerOpen && activeContentTabId === EXPLORER_TAB_ID) {
+      handleExplorerOpenChange(false);
+      // Leaving the tree cannot leave an empty editor area behind.
+      setActiveContentTabId((current) => (current === EXPLORER_TAB_ID ? CHAT_TAB_ID : current));
+      return;
+    }
+    handleExplorerOpenChange(true);
+    setActiveContentTabId(EXPLORER_TAB_ID);
+  }, [explorerOpen, activeContentTabId, handleExplorerOpenChange]);
+
+  // Pinned views first (conversation, then the file tree), open files after
+  // them — that way the two permanent tabs never shift when files come and go.
   const mainTabs: Tab[] = [
     { id: CHAT_TAB_ID, label: translate("chat.tab"), filePath: "", kind: "chat", closable: false },
+    ...(explorerOpen
+      ? [{ id: EXPLORER_TAB_ID, label: translate("files.explorer"), filePath: "", kind: "explorer" as const, closable: false }]
+      : []),
     ...fileTabs,
   ];
   const rightPanelTabs: Tab[] = terminalTabs.map((tab) => ({
@@ -511,28 +545,6 @@ export function AppShell() {
       }));
     } catch { /* storage is optional */ }
   }, [terminalTabs, rightPanelTabId, rightPanelOpen, terminalsRestored]);
-
-  // The file tree lives in the sidebar but is toggled from the top toolbar, so
-  // the shell owns the flag and persists it (same preference the sidebar arrow
-  // used to store on its own).
-  const [explorerOpen, setExplorerOpen] = useState(true);
-  useEffect(() => {
-    setExplorerOpen(loadExplorerOpen());
-  }, []);
-  const handleExplorerOpenChange = useCallback((open: boolean) => {
-    saveExplorerOpen(open);
-    setExplorerOpen(open);
-  }, []);
-  const handleExplorerToggle = useCallback(() => {
-    // With the sidebar hidden there is no tree on screen, so the first press
-    // reveals the sidebar and the tree together.
-    if (!sidebarOpen) {
-      setSidebarOpen(true);
-      handleExplorerOpenChange(true);
-      return;
-    }
-    handleExplorerOpenChange(!explorerOpen);
-  }, [sidebarOpen, explorerOpen, handleExplorerOpenChange]);
 
   const handleFileViewerStateChange = useCallback((
     tabId: string,
@@ -1329,6 +1341,10 @@ export function AppShell() {
 
   const activeFileTab = fileTabs.find((tab) => tab.id === activeContentTabId) ?? null;
   const fileTabActive = activeFileTab !== null && Boolean(activeFileTab.filePath);
+  // The tree lists whatever workspace is on screen. Without a project there is
+  // nothing to list, so the view simply does not take over the editor area.
+  const explorerCwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd ?? null;
+  const explorerTabActive = explorerOpen && Boolean(explorerCwd) && activeContentTabId === EXPLORER_TAB_ID;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
 
@@ -1356,14 +1372,6 @@ export function AppShell() {
         onSessionDeleted={handleSessionDeleted}
         selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
         onCwdChange={handleCwdChange}
-        onOpenFile={handleOpenFile}
-        onOpenTerminal={handleOpenTerminal}
-        explorerRefreshKey={explorerRefreshKey}
-        onExplorerRefresh={handleExplorerRefresh}
-        explorerOpen={explorerOpen}
-        onExplorerOpenChange={handleExplorerOpenChange}
-        onAtMention={handleAtMention}
-        onAtMentions={handleAtMentions}
         onBackgroundTaskDone={handleBackgroundTaskDone}
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
         onSessionsChange={handleSessionsChange}
@@ -1966,33 +1974,41 @@ export function AppShell() {
     );
   };
 
-  // The file tree lives in the sidebar; this is its entry point in the toolbar.
-  const renderExplorerToggle = () => {
-    const active = sidebarOpen && explorerOpen;
+  // This is the explorer's entry point in the toolbar. Styled like its
+  // neighbours (history / system / tools) so the row reads as one group of
+  // labelled toggles.
+  const renderExplorerToggle = (mobile: boolean) => {
+    const active = explorerOpen && activeContentTabId === EXPLORER_TAB_ID;
     const label = active ? translate("files.hideExplorer") : translate("files.showExplorer");
     return (
       <button
         type="button"
         onClick={handleExplorerToggle}
-        aria-controls="session-sidebar"
+        aria-controls={EXPLORER_PANE_ID}
         aria-expanded={active}
         title={label}
         aria-label={label}
+        data-mobile-toolbar-explorer={mobile ? "true" : undefined}
         style={{
-          display: "flex", alignItems: "center", justifyContent: "center",
-          width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          width: mobile ? TOP_BAR_ICON_BUTTON_SIZE : undefined,
+          height: "100%", padding: mobile ? 0 : "0 12px",
           background: active ? "var(--bg-selected)" : "none",
-          border: "none", borderRight: "1px solid var(--border)",
+          border: "none",
+          borderTop: active ? "2px solid var(--accent)" : "2px solid transparent",
+          borderRight: "1px solid var(--border)",
+          cursor: "pointer",
           color: active ? "var(--text)" : "var(--text-muted)",
-          cursor: "pointer", flexShrink: 0, transition: "color 0.12s, background 0.12s",
+          fontSize: 11, whiteSpace: "nowrap", transition: "color 0.1s, background 0.1s",
         }}
         onMouseEnter={(event) => { event.currentTarget.style.color = "var(--text)"; }}
         onMouseLeave={(event) => { event.currentTarget.style.color = active ? "var(--text)" : "var(--text-muted)"; }}
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: active ? "var(--accent)" : "var(--text-dim)", flexShrink: 0 }} aria-hidden="true">
           <path d="M3 6a2 2 0 0 1 2-2h3.2l1.8 2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-          <path d="M9 12h6M9 15.5h4" />
+          <path d="M8.5 11.5h7M8.5 15h4" />
         </svg>
+        {!mobile && <span>{translate("files.explorer")}</span>}
       </button>
     );
   };
@@ -2147,6 +2163,8 @@ export function AppShell() {
             onClick={handleSidebarToggle}
              title={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
              aria-label={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
+            aria-controls="session-sidebar"
+            aria-expanded={sidebarOpen}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
               width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
@@ -2166,7 +2184,7 @@ export function AppShell() {
               </svg>
             )}
           </button>
-          {renderExplorerToggle()}
+          {renderExplorerToggle(isMobile)}
           {isMobile && (
             <div
               ref={mobileToolbarRef}
@@ -2508,8 +2526,8 @@ export function AppShell() {
         {isMobile && renderProjectTrustWarning(true)}
         </div>
 
-        {/* Main editor tabs — the conversation plus every open file (VSCode-style) */}
-        {fileTabs.length > 0 && (
+        {/* Main editor tabs — the conversation, the file tree and every open file (VSCode-style) */}
+        {mainTabs.length > 1 && (
           <div style={{ flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)" }}>
             <TabBar
               tabs={mainTabs}
@@ -2529,9 +2547,10 @@ export function AppShell() {
                 inset: 0,
                 display: "flex",
                 flexDirection: "column",
-                // The conversation keeps streaming while a file tab is in front,
-                // so it is hidden with visibility instead of being unmounted.
-                visibility: fileTabActive ? "hidden" : "visible",
+                // The conversation keeps streaming while another view (a file or
+                // the tree) is in front, so it is hidden with visibility
+                // instead of being unmounted.
+                visibility: fileTabActive || explorerTabActive ? "hidden" : "visible",
               }}
             >
               <ChatWindow
@@ -2609,6 +2628,24 @@ export function AppShell() {
                 </div>
               </div>
             )
+          ) : null}
+          {/* The file tree takes over the editor area while its tab is active. */}
+          {explorerTabActive && explorerCwd ? (
+            <div
+              id={EXPLORER_PANE_ID}
+              data-testid="file-explorer-pane"
+              style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column" }}
+            >
+              <FileExplorerPane
+                cwd={explorerCwd}
+                onOpenFile={handleOpenFile}
+                onOpenTerminal={handleOpenTerminal}
+                onAtMention={handleAtMention}
+                onAtMentions={handleAtMentions}
+                refreshKey={explorerRefreshKey}
+                onRefresh={handleExplorerRefresh}
+              />
+            </div>
           ) : null}
           {/* Only the active file tab mounts a viewer. Lightweight per-tab state
               lives in AppShell and is restored on activation. */}
