@@ -30,6 +30,7 @@ import { SkillsConfig } from "./SkillsConfig";
 import { AgentsConfig } from "./AgentsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
+import { ModelSelector, type ModelSelectorOption } from "./ModelSelector";
 
 interface Props {
   cwd: string | null;
@@ -75,6 +76,60 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
   const [webAuthEnabled, setWebAuthEnabled] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
+  const [defaultModel, setDefaultModel] = useState<{ provider: string; modelId: string } | null>(null);
+  const [defaultModelOptions, setDefaultModelOptions] = useState<ModelSelectorOption[]>([]);
+  const [defaultModelLoading, setDefaultModelLoading] = useState(true);
+  const [defaultModelSaving, setDefaultModelSaving] = useState(false);
+  const [defaultModelError, setDefaultModelError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/default-model")
+      .then(async (response) => {
+        const data = await response.json() as {
+          defaultModel?: { provider: string; modelId: string } | null;
+          modelList?: { id: string; name: string; provider: string }[];
+          error?: string;
+        };
+        if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+        if (cancelled) return;
+        setDefaultModel(data.defaultModel ?? null);
+        setDefaultModelOptions((data.modelList ?? []).map((model) => ({
+          provider: model.provider,
+          modelId: model.id,
+          name: model.name,
+        })));
+      })
+      .catch((cause) => {
+        if (!cancelled) setDefaultModelError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => {
+        if (!cancelled) setDefaultModelLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const changeDefaultModel = async (model: { provider: string; modelId: string } | null) => {
+    setDefaultModelSaving(true);
+    setDefaultModelError(null);
+    try {
+      const response = await fetch("/api/default-model", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(model ?? { provider: null, modelId: null }),
+      });
+      const data = await response.json() as {
+        defaultModel?: { provider: string; modelId: string } | null;
+        error?: string;
+      };
+      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+      setDefaultModel(data.defaultModel ?? null);
+    } catch (cause) {
+      setDefaultModelError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setDefaultModelSaving(false);
+    }
+  };
 
   useEffect(() => {
     setThinkingExpanded(isThinkingExpandedByDefault());
@@ -266,6 +321,26 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
             />
           </div>
         </div>
+      </section>
+
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t("settings.defaultModel")}</h3>
+        <p className="settings-general-description">{t("settings.defaultModelDescription")}</p>
+        <div className="settings-default-model">
+          <ModelSelector
+            options={defaultModelOptions}
+            value={defaultModel}
+            onChange={(provider, modelId) => void changeDefaultModel({ provider, modelId })}
+            onClear={() => void changeDefaultModel(null)}
+            emptyLabel={t("settings.defaultModelAutomatic")}
+            disabled={defaultModelLoading}
+            busy={defaultModelSaving}
+            variant="field"
+            placement="auto"
+            ariaLabel={t("settings.defaultModel")}
+          />
+        </div>
+        {defaultModelError && <p role="alert" className="settings-general-error">{defaultModelError}</p>}
       </section>
 
       {shellSettings?.isWindows && (

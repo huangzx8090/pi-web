@@ -1136,6 +1136,11 @@
   font-size: 12px;
 }
 
+.settings-default-model {
+  width: 100%;
+  max-width: 420px;
+}
+
 .settings-general-error {
   margin: 8px 0 0;
   color: #ef4444;
