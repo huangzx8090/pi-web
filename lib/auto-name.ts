@@ -13,10 +13,8 @@ export interface AutoNameCandidate {
   transient?: boolean;
   /** "subagent" rows are never titled independently. */
   relationKind?: string | null;
-  /** Messages persisted in the session file. */
-  messageCount: number;
-  /** User turns counted from the live session state. */
-  userMessages: number;
+  /** Assistant turns counted from the live session state. */
+  assistantMessages: number;
 }
 
 export function shouldAutoNameSession(
@@ -28,11 +26,19 @@ export function shouldAutoNameSession(
     alreadyHandled: boolean;
     /** A debounce/retry timer is already scheduled for this session. */
     hasPendingTimer: boolean;
+    /** The session is mid-turn right now. */
+    sessionRunning: boolean;
   },
 ): boolean {
   if (!options.isFresh || options.alreadyHandled || options.hasPendingTimer) return false;
   if (session.transient) return false;
   if (session.relationKind === "subagent") return false;
   if (session.name && session.name.trim().length > 0) return false;
-  return session.userMessages > 0 || session.messageCount > 0;
+  // Name the session once its first reply has landed, not on the first prompt.
+  // A prompt alone states the goal and nothing else, which is what made early
+  // titles vague and long-winded; with the reply in the transcript the model
+  // also sees what the work turned out to be. Waiting for the turn to finish
+  // keeps a half-streamed answer out of that transcript.
+  if (options.sessionRunning) return false;
+  return session.assistantMessages > 0;
 }

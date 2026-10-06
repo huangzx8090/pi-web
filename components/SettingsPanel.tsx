@@ -77,10 +77,14 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
   const [defaultModel, setDefaultModel] = useState<{ provider: string; modelId: string } | null>(null);
-  const [defaultModelOptions, setDefaultModelOptions] = useState<ModelSelectorOption[]>([]);
-  const [defaultModelLoading, setDefaultModelLoading] = useState(true);
+  const [titleModel, setTitleModel] = useState<{ provider: string; modelId: string } | null>(null);
+  // Both selectors offer the same list, so one fetch fills them.
+  const [modelOptions, setModelOptions] = useState<ModelSelectorOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(true);
   const [defaultModelSaving, setDefaultModelSaving] = useState(false);
   const [defaultModelError, setDefaultModelError] = useState<string | null>(null);
+  const [titleModelSaving, setTitleModelSaving] = useState(false);
+  const [titleModelError, setTitleModelError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,13 +92,15 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
       .then(async (response) => {
         const data = await response.json() as {
           defaultModel?: { provider: string; modelId: string } | null;
+          titleModel?: { provider: string; modelId: string } | null;
           modelList?: { id: string; name: string; provider: string }[];
           error?: string;
         };
         if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
         if (cancelled) return;
         setDefaultModel(data.defaultModel ?? null);
-        setDefaultModelOptions((data.modelList ?? []).map((model) => ({
+        setTitleModel(data.titleModel ?? null);
+        setModelOptions((data.modelList ?? []).map((model) => ({
           provider: model.provider,
           modelId: model.id,
           name: model.name,
@@ -104,7 +110,7 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
         if (!cancelled) setDefaultModelError(cause instanceof Error ? cause.message : String(cause));
       })
       .finally(() => {
-        if (!cancelled) setDefaultModelLoading(false);
+        if (!cancelled) setModelsLoading(false);
       });
     return () => { cancelled = true; };
   }, []);
@@ -128,6 +134,28 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
       setDefaultModelError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setDefaultModelSaving(false);
+    }
+  };
+
+  const changeTitleModel = async (model: { provider: string; modelId: string } | null) => {
+    setTitleModelSaving(true);
+    setTitleModelError(null);
+    try {
+      const response = await fetch("/api/title-model", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(model ?? { provider: null, modelId: null }),
+      });
+      const data = await response.json() as {
+        titleModel?: { provider: string; modelId: string } | null;
+        error?: string;
+      };
+      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+      setTitleModel(data.titleModel ?? null);
+    } catch (cause) {
+      setTitleModelError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setTitleModelSaving(false);
     }
   };
 
@@ -328,12 +356,12 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
         <p className="settings-general-description">{t("settings.defaultModelDescription")}</p>
         <div className="settings-default-model">
           <ModelSelector
-            options={defaultModelOptions}
+            options={modelOptions}
             value={defaultModel}
             onChange={(provider, modelId) => void changeDefaultModel({ provider, modelId })}
             onClear={() => void changeDefaultModel(null)}
             emptyLabel={t("settings.defaultModelAutomatic")}
-            disabled={defaultModelLoading}
+            disabled={modelsLoading}
             busy={defaultModelSaving}
             variant="field"
             placement="auto"
@@ -341,6 +369,26 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
           />
         </div>
         {defaultModelError && <p role="alert" className="settings-general-error">{defaultModelError}</p>}
+      </section>
+
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t("settings.titleModel")}</h3>
+        <p className="settings-general-description">{t("settings.titleModelDescription")}</p>
+        <div className="settings-default-model">
+          <ModelSelector
+            options={modelOptions}
+            value={titleModel}
+            onChange={(provider, modelId) => void changeTitleModel({ provider, modelId })}
+            onClear={() => void changeTitleModel(null)}
+            emptyLabel={t("settings.titleModelAutomatic")}
+            disabled={modelsLoading}
+            busy={titleModelSaving}
+            variant="field"
+            placement="auto"
+            ariaLabel={t("settings.titleModel")}
+          />
+        </div>
+        {titleModelError && <p role="alert" className="settings-general-error">{titleModelError}</p>}
       </section>
 
       {shellSettings?.isWindows && (

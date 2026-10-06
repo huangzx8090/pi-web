@@ -6,6 +6,7 @@ import { listSessionFamilies, type SessionFamily } from "@/lib/session-family";
 import { loadExplorerOpen, saveExplorerOpen } from "@/lib/file-explorer-state";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
+import { firstMessageTitle } from "@/lib/title-text";
 import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib/project-groups";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatCompactRelativeTime, formatRelativeTime } from "@/lib/i18n/format";
@@ -2959,12 +2960,12 @@ function SessionItem({
   // back to the compact /skill:name args command the user typed before using
   // it as the auto-name fallback, mirroring MessageView's rendering.
   const displayFirstMessage = skillExpansionToCommand(session.firstMessage) ?? session.firstMessage;
-  const title = session.name || displayFirstMessage.slice(0, 50) || session.id.slice(0, 12);
+  const title = session.name || firstMessageTitle(displayFirstMessage, session.id);
 
   const startRename = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (session.transient) return;
-    setRenameValue(session.name || displayFirstMessage.slice(0, 50) || session.id.slice(0, 12));
+    setRenameValue(session.name || firstMessageTitle(displayFirstMessage, session.id));
     setRenaming(true);
   }, [session.name, session.transient, displayFirstMessage, session.id]);
 

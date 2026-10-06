@@ -23,9 +23,17 @@ test("会话落盘后会用服务端记录清除临时状态", () => {
   assert.match(source, /if \(selectedSession\) hydrateSelectedSession\(selectedSession\.id\)/);
 });
 
-test("新会话会在首条消息后自动命名，且只针对本次新建的会话", () => {
+test("新会话会在首轮回复结束后自动命名，且只针对本次新建的会话", () => {
   assert.match(source, /freshSessionIdsRef\.current\.add\(session\.id\)/);
   assert.match(source, /if \(!eligible\) return;/);
   assert.match(source, /void requestAutoName\(session\.id, \{ silent: true \}\)/);
   assert.match(source, /const eligible = shouldAutoNameSession\(/);
+});
+
+test("自动命名等到首轮回复落地且本轮结束，不抢在首条用户消息上", () => {
+  assert.match(source, /const assistantMessages = sessionStats\?\.sessionId === session\.id/);
+  assert.match(source, /\? \(sessionStats\.assistantMessages \?\? 0\)/);
+  assert.match(source, /^\s+assistantMessages,$/m);
+  assert.match(source, /^\s+sessionRunning,$/m);
+  assert.match(source, /\[selectedSession, sessionStats, sessionRunning, requestAutoName\]/);
 });

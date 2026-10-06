@@ -1009,33 +1009,37 @@ export function AppShell() {
     setAutoNameStatus({ kind: "idle" });
   }, [selectedSession?.id]);
 
-  // Auto-title a freshly started conversation from its first user message.
+  // Auto-title a freshly started conversation once its first reply has landed.
+  // The reply is what turns a guessed-at title into an accurate one, and the
+  // wait also means the transcript we summarize is a complete turn.
   useEffect(() => {
     const session = selectedSession;
     if (!session) return;
-    const userMessages = sessionStats?.sessionId === session.id ? (sessionStats.userMessages ?? 0) : 0;
+    const assistantMessages = sessionStats?.sessionId === session.id
+      ? (sessionStats.assistantMessages ?? 0)
+      : 0;
     const eligible = shouldAutoNameSession(
       {
         id: session.id,
         name: session.name,
         transient: session.transient,
         relationKind: session.relation?.kind ?? null,
-        messageCount: session.messageCount,
-        userMessages,
+        assistantMessages,
       },
       {
         isFresh: freshSessionIdsRef.current.has(session.id),
         alreadyHandled: autoNamedSessionIdsRef.current.has(session.id) || autoNameInFlightRef.current.has(session.id),
         hasPendingTimer: autoNameTimersRef.current.has(session.id),
+        sessionRunning,
       },
     );
     if (!eligible) return;
-    // Small debounce so the first user turn is on disk before we summarize it.
+    // Small debounce so the finished turn is on disk before we summarize it.
     autoNameTimersRef.current.set(session.id, setTimeout(() => {
       autoNameTimersRef.current.delete(session.id);
       void requestAutoName(session.id, { silent: true });
     }, 600));
-  }, [selectedSession, sessionStats, requestAutoName]);
+  }, [selectedSession, sessionStats, sessionRunning, requestAutoName]);
 
   const handleExplorerRefresh = useCallback(() => {
     setExplorerRefreshKey((k) => k + 1);

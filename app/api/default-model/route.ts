@@ -1,50 +1,13 @@
 import { NextResponse } from "next/server";
-import { createAgentSessionServices, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { resolveVisibleModels } from "@/lib/model-scope";
 import { readDefaultModel, writeDefaultModel, type DefaultModelRef } from "@/lib/default-model";
 import { invalidateModelsCache } from "@/lib/models-cache";
+import { listGlobalModels } from "@/lib/model-options";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { readTitleModel, type TitleModelRef } from "@/lib/title-model";
 
 export const dynamic = "force-dynamic";
 
-const modelNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-
-interface DefaultModelOption {
-  id: string;
-  name: string;
-  provider: string;
-  input?: string[];
-}
-
-function compareModelOptions(a: DefaultModelOption, b: DefaultModelOption): number {
-  return modelNameCollator.compare(a.name || a.id, b.name || b.id)
-    || modelNameCollator.compare(a.provider, b.provider)
-    || modelNameCollator.compare(a.id, b.id);
-}
-
-/**
- * List the models the global default can point at. The agent dir is used as
- * cwd so project-local extensions cannot change the global default's options;
- * `enabledModels` is still applied, matching what a new session can select.
- */
-async function listGlobalModels(): Promise<DefaultModelOption[]> {
-  const agentDir = getAgentDir();
-  const services = await createAgentSessionServices({ cwd: agentDir, agentDir });
-  const scope = await resolveVisibleModels(
-    services.modelRuntime,
-    services.settingsManager.getEnabledModels(),
-  );
-  return scope.visible
-    .map((model) => ({
-      id: model.id,
-      name: model.name,
-      provider: model.provider,
-      ...(model.input ? { input: model.input } : {}),
-    }))
-    .sort(compareModelOptions);
-}
-
-function parseDefaultModel(body: { provider?: unknown; modelId?: unknown }): DefaultModelRef | null | undefined {
+function parseModelRef(body: { provider?: unknown; modelId?: unknown }): DefaultModelRef | null | undefined {
   const { provider, modelId } = body;
   if ((provider === null || provider === undefined) && (modelId === null || modelId === undefined)) {
     return null;
@@ -58,6 +21,12 @@ function parseDefaultModel(body: { provider?: unknown; modelId?: unknown }): Def
   return undefined;
 }
 
+/**
+ * Read both model settings in one round trip: the settings panel renders them
+ * side by side, and they share the same option list. Writes stay split
+ * (`/api/default-model` and `/api/title-model`) because they touch different
+ * files owned by different processes.
+ */
 export async function GET() {
   let defaultModel: DefaultModelRef | null = null;
   try {
@@ -66,11 +35,22 @@ export async function GET() {
     // A malformed settings file leaves no readable default; PUT still refuses
     // to overwrite it.
   }
+  let titleModel: TitleModelRef | null = null;
   try {
-    return NextResponse.json({ defaultModel, modelList: await listGlobalModels() });
+    titleModel = readTitleModel();
+  } catch {
+    // Same reasoning as above: a broken pi-web settings.json must not make the
+    // rest of the settings panel unreadable.
+  }
+  try {
+    return NextResponse.json({
+      defaultModel,
+      titleModel,
+      modelList: await listGlobalModels(),
+    });
   } catch {
     // A broken model configuration must not make the setting unreadable.
-    return NextResponse.json({ defaultModel, modelList: [] });
+    return NextResponse.json({ defaultModel, titleModel, modelList: [] });
   }
 }
 
@@ -84,7 +64,7 @@ export async function PUT(req: Request) {
 
   try {
     const body = await req.json() as { provider?: unknown; modelId?: unknown };
-    const model = parseDefaultModel(body);
+    const model = parseModelRef(body);
     if (model === undefined) {
       return NextResponse.json(
         { error: "provider and modelId must both be non-empty strings, or both null to clear" },

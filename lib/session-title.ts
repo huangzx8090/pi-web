@@ -9,10 +9,18 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { trimSessionTitle } from "./title-text";
 
 const TITLE_TIMEOUT_MS = 90_000;
-const TITLE_MAX_TOKENS = 256;
-const MAX_TITLE_LENGTH = 80;
+/**
+ * Budget for the whole response, reasoning included. A hybrid model that cannot
+ * actually disable thinking spends a few hundred tokens thinking before it
+ * writes anything, so a tight cap makes the stream stop on "length" with no
+ * text block at all — the title then fails with nothing to show for it. 1024
+ * leaves an order of magnitude of headroom over a one-line answer and is still
+ * a rounding error next to the session it names.
+ */
+const TITLE_MAX_TOKENS = 1024;
 
 // Per-message caps. A title needs what the user asked for (every user turn,
 // including mid-session pivots) and what came out of it (the last reply); the
@@ -42,7 +50,8 @@ const TITLE_PROMPT = `Create a concise title for this session based on the conve
 Requirements:
 - Match the primary language used by the user.
 - Describe the user's concrete goal or the outcome, not the act of chatting.
-- Use 4-12 words for space-separated languages, or 8-24 characters for CJK text when practical.
+- Stay short enough for a narrow sidebar: roughly 8-14 characters for CJK text, or 3-6 words for space-separated languages.
+- Use a single phrase. No subtitle, no colon-joined pair, no trailing punctuation.
 - Do not call any tools.
 - Return only the title as plain text, with no quotes, label, markdown, or explanation.`;
 
@@ -83,9 +92,17 @@ export function resolveTitleThinkingLevel(model: Model<Api>): ThinkingLevel {
  * summarization path: a short system prompt, one user turn, no tools, a fresh
  * session id, and cacheRetention "none". The request is too small and too
  * unique to reuse the live session's prefix or write a cache nobody will read.
+ *
+ * `modelOverride` is the user's configured title model. Naming is a tiny
+ * classification job, so pointing it at something cheaper than the session's own
+ * model is usually the point of configuring one.
  */
-export function buildTitleRequest(source: Agent, transcript: string): TitleRequest {
-  const model = source.state.model;
+export function buildTitleRequest(
+  source: Agent,
+  transcript: string,
+  modelOverride?: Model<Api>,
+): TitleRequest {
+  const model = modelOverride ?? source.state.model;
   const thinkingLevel = resolveTitleThinkingLevel(model);
   return {
     model,
@@ -243,11 +260,7 @@ export function parseGeneratedSessionTitle(raw: string): string {
     throw new Error("The model did not return a usable session title");
   }
 
-  const characters = Array.from(value);
-  if (characters.length > MAX_TITLE_LENGTH) {
-    value = characters.slice(0, MAX_TITLE_LENGTH).join("").trim();
-  }
-  return value;
+  return trimSessionTitle(value);
 }
 
 function titleFromAssistant(message: AssistantMessage): GeneratedSessionTitle {
@@ -262,7 +275,16 @@ function titleFromAssistant(message: AssistantMessage): GeneratedSessionTitle {
     .map((block) => block.text)
     .join("\n")
     .trim();
-  if (!text) throw new Error("The model did not return a session title");
+  // Say why there is no text. A reply that stopped on the token cap contains
+  // only reasoning, and "did not return a title" sends the reader looking for a
+  // prompt problem instead of a budget one.
+  if (!text) {
+    throw new Error(
+      message.stopReason === "length"
+        ? `The title model ran out of tokens before answering (${message.usage?.output ?? 0} output tokens)`
+        : "The model did not return a session title",
+    );
+  }
   return {
     title: parseGeneratedSessionTitle(text),
     ...(message.usage ? {
@@ -277,7 +299,15 @@ function titleFromAssistant(message: AssistantMessage): GeneratedSessionTitle {
   };
 }
 
-export async function generateSessionTitle(source: AgentSession): Promise<GeneratedSessionTitle> {
+export interface GenerateSessionTitleOptions {
+  /** Model used to write the title. Defaults to the session's own model. */
+  model?: Model<Api>;
+}
+
+export async function generateSessionTitle(
+  source: AgentSession,
+  options: GenerateSessionTitleOptions = {},
+): Promise<GeneratedSessionTitle> {
   const sourceAgent = source.agent;
   // Snapshot whatever the session holds right now. The transcript is plain
   // text the model reads once, so a turn still in flight only means the
@@ -287,11 +317,11 @@ export async function generateSessionTitle(source: AgentSession): Promise<Genera
     throw new Error("The session has no usable text to name");
   }
 
-  const { model, context, options } = buildTitleRequest(sourceAgent, transcript);
+  const { model, context, options: streamOptions } = buildTitleRequest(sourceAgent, transcript, options.model);
   const apiKey = await sourceAgent.getApiKey?.(model.provider);
   const controller = new AbortController();
   const requestOptions: SimpleStreamOptions = {
-    ...options,
+    ...streamOptions,
     signal: controller.signal,
     ...(apiKey ? { apiKey } : {}),
   };
