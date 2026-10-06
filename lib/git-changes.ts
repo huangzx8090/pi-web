@@ -11,6 +11,8 @@ import type {
 import {
   classifyGitStatus,
   parseGitPorcelainV1,
+  parseNumstatZ,
+  type GitLineStats,
   type GitPorcelainEntry,
 } from "./git-status";
 
@@ -40,6 +42,29 @@ function isWithinPath(parent: string, target: string): boolean {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
+/**
+ * Resolve symlinks so containment checks compare like with like.
+ *
+ * `git rev-parse --show-toplevel` already returns a symlink-free path, so a
+ * cwd such as macOS's `/tmp` (a symlink to `/private/tmp`) would otherwise
+ * look like it sits outside its own repository and every change would be
+ * filtered away. Paths that are not on disk yet (deleted entries) fall back
+ * to resolving their parent directory.
+ */
+function resolveRealPath(target: string): string {
+  const resolved = path.resolve(target);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    // Not on disk — fall through and resolve the parent instead.
+  }
+  try {
+    return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
+  } catch {
+    return resolved;
+  }
+}
+
 function toGitPath(filePath: string): string {
   return filePath.split(path.sep).join("/");
 }
@@ -54,10 +79,10 @@ async function readStatusEntries(repositoryRoot: string): Promise<GitPorcelainEn
   return parseGitPorcelainV1(output);
 }
 
-async function readTrackedLineStats(
+async function readTrackedLineStatsByPath(
   repositoryRoot: string,
   cwd: string,
-): Promise<{ additions: number; deletions: number }> {
+): Promise<Map<string, GitLineStats>> {
   const relativeCwd = toGitPath(path.relative(repositoryRoot, cwd));
   const pathspec = relativeCwd || ".";
   try {
@@ -66,23 +91,14 @@ async function readTrackedLineStats(
       "--no-color",
       "--no-ext-diff",
       "--numstat",
+      "-z",
       "HEAD",
       "--",
       pathspec,
     ]);
-    let additions = 0;
-    let deletions = 0;
-    for (const line of output.split(/\r?\n/)) {
-      if (!line) continue;
-      const [added, deleted] = line.split("\t", 2);
-      const addedCount = Number(added);
-      const deletedCount = Number(deleted);
-      if (Number.isInteger(addedCount)) additions += addedCount;
-      if (Number.isInteger(deletedCount)) deletions += deletedCount;
-    }
-    return { additions, deletions };
+    return parseNumstatZ(output);
   } catch {
-    return { additions: 0, deletions: 0 };
+    return new Map();
   }
 }
 
@@ -100,7 +116,8 @@ function countUntrackedTextLines(filePath: string): number {
 }
 
 export async function getGitStatus(cwd: string): Promise<GitStatusResponse> {
-  const repositoryRoot = await findRepositoryRoot(cwd);
+  const resolvedCwd = resolveRealPath(cwd);
+  const repositoryRoot = await findRepositoryRoot(resolvedCwd);
   if (!repositoryRoot) {
     return {
       isGitRepository: false,
@@ -111,32 +128,37 @@ export async function getGitStatus(cwd: string): Promise<GitStatusResponse> {
     };
   }
 
+  const resolvedRoot = resolveRealPath(repositoryRoot);
   const [entries, trackedLineStats] = await Promise.all([
-    readStatusEntries(repositoryRoot),
-    readTrackedLineStats(repositoryRoot, cwd),
+    readStatusEntries(resolvedRoot),
+    readTrackedLineStatsByPath(resolvedRoot, resolvedCwd),
   ]);
   const files = entries.flatMap((entry): GitFileStatus[] => {
-    const filePath = path.resolve(repositoryRoot, entry.path);
-    if (!isWithinPath(cwd, filePath)) return [];
+    const filePath = path.resolve(resolvedRoot, entry.path);
+    if (!isWithinPath(resolvedCwd, filePath)) return [];
     const classified = classifyGitStatus(entry);
+    const stats = trackedLineStats.get(entry.path);
+    // `git diff --numstat` ignores untracked files; count their lines instead.
+    const additions = classified.status === "untracked"
+      ? countUntrackedTextLines(filePath)
+      : stats?.additions ?? 0;
+    const deletions = classified.status === "untracked" ? 0 : stats?.deletions ?? 0;
     return [{
       filePath,
       ...classified,
       indexStatus: entry.indexStatus,
       worktreeStatus: entry.worktreeStatus,
+      additions,
+      deletions,
     }];
   });
-  const untrackedAdditions = files.reduce(
-    (total, file) => total + (file.status === "untracked" ? countUntrackedTextLines(file.filePath) : 0),
-    0,
-  );
 
   return {
     isGitRepository: true,
-    repositoryRoot,
+    repositoryRoot: resolvedRoot,
     files,
-    additions: trackedLineStats.additions + untrackedAdditions,
-    deletions: trackedLineStats.deletions,
+    additions: files.reduce((total, file) => total + file.additions, 0),
+    deletions: files.reduce((total, file) => total + file.deletions, 0),
   };
 }
 
@@ -187,17 +209,20 @@ async function createTrackedFilePatch(
 
 export async function getGitFileDiff(cwd: string, filePath: string): Promise<GitFileDiffResponse> {
   const repositoryRoot = await findRepositoryRoot(cwd);
-  if (!repositoryRoot || !isWithinPath(repositoryRoot, filePath)) return { supported: false };
+  if (!repositoryRoot) return { supported: false };
 
-  const resolvedFilePath = path.resolve(filePath);
-  const relativePath = toGitPath(path.relative(repositoryRoot, resolvedFilePath));
-  const entries = await readStatusEntries(repositoryRoot);
+  const resolvedRoot = resolveRealPath(repositoryRoot);
+  const resolvedFilePath = resolveRealPath(filePath);
+  if (!isWithinPath(resolvedRoot, resolvedFilePath)) return { supported: false };
+
+  const relativePath = toGitPath(path.relative(resolvedRoot, resolvedFilePath));
+  const entries = await readStatusEntries(resolvedRoot);
   const entry = entries.find((candidate) => candidate.path === relativePath);
   if (!entry) return { supported: false };
 
   const { status } = classifyGitStatus(entry);
   if (status === "deleted") {
-    const patch = await createTrackedFilePatch(repositoryRoot, relativePath, entry.originalPath);
+    const patch = await createTrackedFilePatch(resolvedRoot, relativePath, entry.originalPath);
     if (!patch?.includes("\n@@ ")) return { supported: false };
     return { supported: true, status, patch };
   }
@@ -218,7 +243,7 @@ export async function getGitFileDiff(cwd: string, filePath: string): Promise<Git
   if (status === "untracked") {
     patch = createAddedFilePatch(relativePath, newContent);
   } else {
-    const trackedPatch = await createTrackedFilePatch(repositoryRoot, relativePath, entry.originalPath);
+    const trackedPatch = await createTrackedFilePatch(resolvedRoot, relativePath, entry.originalPath);
     if (trackedPatch === null) {
       if (status !== "added") return { supported: false };
       patch = createAddedFilePatch(relativePath, newContent);

@@ -36,6 +36,41 @@ export function parseGitPorcelainV1(output: string): GitPorcelainEntry[] {
 
 const CONFLICT_STATUSES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 
+export interface GitLineStats {
+  additions: number;
+  deletions: number;
+}
+
+/**
+ * Parse `git diff --numstat -z` into per-file line deltas keyed by the path
+ * relative to the repository root — the same key `git status --porcelain` uses.
+ *
+ * With `-z` a rename/copy entry leaves the path field empty and appends the old
+ * and new paths as two extra NUL-terminated tokens. Binary files report `-`,
+ * which fails the integer check and is skipped.
+ */
+export function parseNumstatZ(output: string): Map<string, GitLineStats> {
+  const stats = new Map<string, GitLineStats>();
+  const tokens = output.split("\0");
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!token) continue;
+    const parts = token.split("\t");
+    if (parts.length < 3) continue;
+    const additions = Number(parts[0]);
+    const deletions = Number(parts[1]);
+    let gitPath = parts.slice(2).join("\t");
+    if (!gitPath) {
+      gitPath = tokens[i + 2] ?? "";
+      i += 2;
+    }
+    if (!gitPath) continue;
+    if (!Number.isInteger(additions) || !Number.isInteger(deletions)) continue;
+    stats.set(gitPath, { additions, deletions });
+  }
+  return stats;
+}
+
 export function classifyGitStatus(entry: GitPorcelainEntry): Pick<GitFileStatus, "status" | "code"> {
   const pair = `${entry.indexStatus}${entry.worktreeStatus}`;
   if (pair === "??") return { status: "untracked", code: "U" };

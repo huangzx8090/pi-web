@@ -12,6 +12,10 @@ export interface GitFileStatus {
   code: "M" | "A" | "D" | "R" | "U" | "C";
   indexStatus: string;
   worktreeStatus: string;
+  /** Lines added in this file vs HEAD. Untracked files report their line count. */
+  additions: number;
+  /** Lines removed in this file vs HEAD. */
+  deletions: number;
 }
 
 export interface GitStatusResponse {
