@@ -284,6 +284,7 @@ export const zhTWLocale: LocalePlugin = {
     "sidebar.pin": "置頂",
     "sidebar.unpin": "取消置頂",
     "sidebar.newChat": "新對話",
+    "sidebar.running": "進行中",
     "sidebar.noChats": "暫無聊天",
     "createProject.title": "建立專案",
     "createProject.namePlaceholder": "專案名稱",

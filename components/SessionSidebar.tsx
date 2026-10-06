@@ -32,6 +32,9 @@ function projectLabelOf(root: string): string {
   return parts.length > 0 ? parts[parts.length - 1] : root;
 }
 
+/** 「新建」默认落到的目录（对话级，不属于任何项目）。 */
+const SCRATCH_CWD_RE = /\/pi-cwd-\d{8}$/;
+
 /**
  * Rows to render for one project. Families are already sorted most-recent-
  * first, so the default is the newest PROJECT_COLLAPSE_LIMIT conversations;
@@ -1224,19 +1227,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [onNewSession]);
 
   const handleNewSession = useCallback(async () => {
-    // 有选定工作区就在那里新建；没有（例如从桌面 App 直接打开）就落到默认目录。
-    if (selectedCwd) {
-      createNewSessionIn(selectedCwd);
-      return;
-    }
+    // 顶层「新对话」：不塞进当前项目，而是落到默认目录（对话级）。
     try {
       const res = await fetch("/api/default-cwd", { method: "POST" });
       const data = await res.json() as { cwd?: string };
       if (data.cwd) {
         setSelectedCwd(data.cwd);
         createNewSessionIn(data.cwd);
+        return;
       }
     } catch { /* ignore */ }
+    if (selectedCwd) createNewSessionIn(selectedCwd);
   }, [selectedCwd, createNewSessionIn]);
 
   const handleCreateProject = useCallback(async (input: { name: string; cwd: string }) => {
@@ -1314,6 +1315,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     }
     return names;
   }, [registeredProjects]);
+  // 「不属于任何项目」的目录：home、/tmp、以及「新建」的默认目录 ~/pi-cwd-*。
+  const isProjectlessCwd = useCallback((cwd: string): boolean => {
+    if (!cwd) return true;
+    if (SCRATCH_CWD_RE.test(cwd)) return true;
+    if (homeDir && cwd.replace(/\/+$/, "") === homeDir.replace(/\/+$/, "")) return true;
+    if (cwd === "/tmp" || cwd === "/private/tmp") return true;
+    return false;
+  }, [homeDir]);
   const allProjectGroups = useMemo(() => {
     const sessionGroups = getRecentProjects(allSessions).map((project) => ({
       key: project.key,
@@ -1327,14 +1336,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     const registeredOnly = registeredProjects
       .filter((project) => !seen.has(project.key))
       .map((project) => ({ key: project.key, root: project.root, families: [] as SessionFamily[] }));
-    const groups = [...sessionGroups, ...registeredOnly];
+    const groups = [...sessionGroups, ...registeredOnly]
+      .filter((group) => !isProjectlessCwd(group.root));
     const pinnedIndex = new Map(pinnedProjects.map((key, index) => [key, index]));
     return groups.sort((a, b) => {
       const ia = pinnedIndex.has(a.key) ? pinnedIndex.get(a.key)! : Number.MAX_SAFE_INTEGER;
       const ib = pinnedIndex.has(b.key) ? pinnedIndex.get(b.key)! : Number.MAX_SAFE_INTEGER;
       return ia - ib;
     });
-  }, [allSessions, pinnedProjects, pinnedSessions, registeredProjects]);
+  }, [allSessions, pinnedProjects, pinnedSessions, registeredProjects, isProjectlessCwd]);
 
   // Root session ids per project, including pinned and archived ones. Used to
   // delete a whole project; subagents are removed by the session DELETE cascade.
@@ -1379,6 +1389,26 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       .filter((session): session is SessionInfo => Boolean(session))
       .filter((session) => !archivedSessionIds.has(session.id) && !archivedProjectKeys.has(workspaceKeyOf(session)));
   }, [allSessions, pinnedSessions, archivedSessionIds, archivedProjectKeys]);
+  const runningSessionList = useMemo(
+    () => allSessions
+      .filter((session) => runningSessionIds.has(session.id)
+        && !(session.relation && session.relation.kind === "subagent")
+        && !archivedSessionIds.has(session.id)
+        && !archivedProjectKeys.has(workspaceKeyOf(session)))
+      .sort((a, b) => (b.modified || "").localeCompare(a.modified || "")),
+    [allSessions, runningSessionIds, archivedSessionIds, archivedProjectKeys],
+  );
+  // 最近 = 不属于任何项目的独立对话（「新建」默认落到 ~/pi-cwd-YYYYMMDD）。
+  const recentSessionList = useMemo(
+    () => allSessions
+      .filter((session) => !(session.relation && session.relation.kind === "subagent") && !session.transient)
+      .filter((session) => isProjectlessCwd(session.cwd || ""))
+      .filter((session) => !runningSessionIds.has(session.id) && !pinnedSessions.includes(session.id))
+      .filter((session) => !archivedSessionIds.has(session.id))
+      .sort((a, b) => (b.modified || "").localeCompare(a.modified || ""))
+      .slice(0, 30),
+    [allSessions, runningSessionIds, pinnedSessions, archivedSessionIds, isProjectlessCwd],
+  );
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
@@ -2180,6 +2210,28 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             ))}
           </div>
         )}
+        {/* Running conversations */}
+        {!loading && !error && runningSessionList.length > 0 && (
+          <div style={{ borderBottom: "1px solid var(--border)" }}>
+            <div style={{ padding: "8px 10px 2px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
+              {t("sidebar.running")}
+            </div>
+            {runningSessionList.map((s) => (
+              <SessionItem
+                key={s.id}
+                session={s}
+                isSelected={s.id === selectedSessionId}
+                isRunning
+                isUnread={unreadSessionIds.has(s.id)}
+                isPinned={pinnedSessions.includes(s.id)}
+                onTogglePin={() => toggleSessionPinned(s.id)}
+                onClick={() => handleSelectSessionFromList(s)}
+                onRenamed={loadSessions}
+                onDeleted={(id) => { onSessionDeleted?.(id); loadSessions(); }}
+              />
+            ))}
+          </div>
+        )}
         {!loading && !error && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 10px 4px" }}>
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
@@ -2488,6 +2540,28 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </div>
           );
         })}
+        {/* Recent conversations (conversation-level) */}
+        {!loading && !error && recentSessionList.length > 0 && (
+          <div style={{ borderTop: "1px solid var(--border)", marginTop: 4 }}>
+            <div style={{ padding: "8px 10px 2px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
+              {t("sidebar.recent")}
+            </div>
+            {recentSessionList.map((s) => (
+              <SessionItem
+                key={s.id}
+                session={s}
+                isSelected={s.id === selectedSessionId}
+                isRunning={runningSessionIds.has(s.id)}
+                isUnread={unreadSessionIds.has(s.id)}
+                isPinned={pinnedSessions.includes(s.id)}
+                onTogglePin={() => toggleSessionPinned(s.id)}
+                onClick={() => handleSelectSessionFromList(s)}
+                onRenamed={loadSessions}
+                onDeleted={(id) => { onSessionDeleted?.(id); loadSessions(); }}
+              />
+            ))}
+          </div>
+        )}
         </div>
         </SessionSearch>
       </div>

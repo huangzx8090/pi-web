@@ -284,6 +284,7 @@ export const enLocale: LocalePlugin = {
     "sidebar.pin": "Pin",
     "sidebar.unpin": "Unpin",
     "sidebar.newChat": "New chat",
+    "sidebar.running": "Running",
     "sidebar.noChats": "No chats yet",
     "createProject.title": "Create project",
     "createProject.namePlaceholder": "Project name",
