@@ -2704,6 +2704,7 @@ export function AppShell() {
                   onSessionStatsPanelOpen={openSessionStatsPanel}
                   onContextUsageChange={handleContextUsageChange}
                   onOpenFile={handleOpenLinkedFile}
+                  onFilesUploaded={handleExplorerRefresh}
                   onOpenSession={handleOpenSession}
                   onAskInNewChat={handleAskInNewChat}
                   quoteSelectionEnabled={quoteSelectionEnabled}
