@@ -310,6 +310,8 @@ export const enLocale: LocalePlugin = {
     "sidebar.deleteProject": "Delete project",
     "projectDelete.title": "Delete project?",
     "projectDelete.body": "This permanently deletes \u201c{name}\u201d and its {count} conversation(s), including all subagents. This cannot be undone.",
+    // Empty projects have nothing to delete except the registry entry.
+    "projectDelete.bodyEmpty": "\u201c{name}\u201d has no conversations yet, so this only removes it from the project list.",
     "projectDelete.confirm": "Delete project",
     "projectDelete.deleting": "Deleting\u2026",
     "createProject.create": "Create project",

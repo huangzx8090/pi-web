@@ -310,6 +310,8 @@ export const zhTWLocale: LocalePlugin = {
     "sidebar.deleteProject": "刪除專案",
     "projectDelete.title": "刪除專案？",
     "projectDelete.body": "將永久刪除「{name}」及其 {count} 個對話（含子代理），此操作無法復原。",
+    // Empty projects have nothing to delete except the registry entry.
+    "projectDelete.bodyEmpty": "「{name}」還沒有對話，刪除後只會從專案列表移除。",
     "projectDelete.confirm": "刪除專案",
     "projectDelete.deleting": "刪除中…",
     "createProject.create": "建立專案",

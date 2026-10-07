@@ -612,11 +612,26 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         }
         onSessionDeleted?.(sessionId);
       }
-      await fetch(`/api/projects?key=${encodeURIComponent(target.key)}`, { method: "DELETE" });
+      // Drop the registry entry. The registry has its own loader (the effect
+      // keyed on `refreshKey`), so reloading the session list below does not
+      // refresh it — without this the row stays on screen after a delete.
+      const projectRes = await fetch(`/api/projects?key=${encodeURIComponent(target.key)}`, { method: "DELETE" });
+      if (!projectRes.ok) {
+        const data = await projectRes.json().catch(() => ({})) as { error?: string };
+        throw new Error(data.error ?? `HTTP ${projectRes.status}`);
+      }
+      const registry = await projectRes.json().catch(() => null) as { projects?: RegisteredProject[] } | null;
+      const remaining = registry?.projects;
+      setRegisteredProjects(
+        Array.isArray(remaining) ? remaining : (prev) => prev.filter((entry) => entry.key !== target.key),
+      );
       setArchiveState((state) => ({ ...state, projects: state.projects.filter((k) => k !== target.key) }));
       setPinnedProjects((state) => state.filter((k) => k !== target.key));
-      setDeleteProjectTarget(null);
+      // Refresh before closing the dialog: a project that still has rows in the
+      // (stale) session list would otherwise flash back for a frame, because
+      // those rows come from `allSessions`, not from the registry.
       await loadSessions(true, true);
+      setDeleteProjectTarget(null);
     } catch (e) {
       setDeleteProjectError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1340,10 +1355,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       {deleteProjectTarget && (
         <ConfirmDialog
           title={t("projectDelete.title")}
-          body={t("projectDelete.body", {
-            name: projectNames.get(deleteProjectTarget.key) ?? projectLabelOf(deleteProjectTarget.root),
-            count: deleteProjectTarget.familyRoots.length,
-          })}
+          body={deleteProjectTarget.familyRoots.length === 0
+            ? t("projectDelete.bodyEmpty", {
+              name: projectNames.get(deleteProjectTarget.key) ?? projectLabelOf(deleteProjectTarget.root),
+            })
+            : t("projectDelete.body", {
+              name: projectNames.get(deleteProjectTarget.key) ?? projectLabelOf(deleteProjectTarget.root),
+              count: deleteProjectTarget.familyRoots.length,
+            })}
           confirmLabel={t("projectDelete.confirm")}
           busyLabel={t("projectDelete.deleting")}
           busy={deleteProjectBusy}

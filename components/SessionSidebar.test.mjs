@@ -184,4 +184,15 @@ test("deleting a project removes every conversation root and the registry entry"
   assert.match(source, /`\/api\/sessions\/\$\{encodeURIComponent\(sessionId\)\}`/);
   assert.match(source, /`\/api\/projects\?key=\$\{encodeURIComponent\(target\.key\)\}`/);
   assert.match(source, /projectRootSessionIds\.get\(group\.key\) \?\? \[\]/);
+  // The registry is loaded by its own effect (keyed on `refreshKey`), which
+  // reloading the session list does not re-run. The delete path must update
+  // that state itself, or the row lingers on screen — most visibly for a
+  // project that has no conversations to delete.
+  assert.match(source, /prev\.filter\(\(entry\) => entry\.key !== target\.key\)/);
+  assert.match(source, /Array\.isArray\(remaining\) \? remaining : /);
+});
+
+test("an empty project is deleted without claiming to remove zero conversations", () => {
+  assert.match(source, /deleteProjectTarget\.familyRoots\.length === 0/);
+  assert.match(source, /t\("projectDelete\.bodyEmpty", \{/);
 });

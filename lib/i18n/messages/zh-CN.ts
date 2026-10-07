@@ -310,6 +310,8 @@ export const zhCNLocale: LocalePlugin = {
     "sidebar.deleteProject": "删除项目",
     "projectDelete.title": "删除项目？",
     "projectDelete.body": "将永久删除“{name}”及其 {count} 个对话（含子智能体），此操作无法撤销。",
+    // Empty projects have nothing to delete except the registry entry.
+    "projectDelete.bodyEmpty": "“{name}”还没有对话，删除后只会从项目列表中移除。",
     "projectDelete.confirm": "删除项目",
     "projectDelete.deleting": "删除中…",
     "createProject.create": "创建项目",
