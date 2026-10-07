@@ -209,6 +209,7 @@ export const zhTWLocale: LocalePlugin = {
     "files.hideExplorer": "隱藏檔案瀏覽器",
     "files.noneOpen": "沒有開啟的檔案",
     "layout.resizeSidebar": "調整側邊欄寬度",
+    "layout.resizeExplorer": "調整檔案瀏覽器寬度",
     "layout.resizeFilePanel": "調整檔案面板寬度",
     "layout.resizeHint": "拖曳以調整寬度。按兩下或按 Enter 鍵即可重設。",
     "sidebar.new": "新增",

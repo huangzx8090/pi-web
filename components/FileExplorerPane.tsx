@@ -67,7 +67,7 @@ function ToolbarIconButton({
       style={{
         position: "relative",
         display: "flex", alignItems: "center", justifyContent: "center",
-        width: 26, height: 26, padding: 0, marginRight,
+        width: 24, height: 24, padding: 0, marginRight,
         background,
         border: "none",
         color,
@@ -117,7 +117,7 @@ export function FileExplorerPane({
   }, [onRefresh]);
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg)" }}>
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--bg-panel)" }}>
       <div style={{
         display: "flex",
         alignItems: "center",
@@ -125,14 +125,15 @@ export function FileExplorerPane({
         background: "var(--bg-panel)",
         borderBottom: "1px solid var(--border)",
       }}>
-        {/* The tab already says "file explorer", so the header only needs to say
-            which workspace is being listed — plus the tree's own actions. */}
+        {/* One thin row: which workspace is being listed, then the tree's own
+            actions. In a narrow column the name ellipsises away rather than
+            pushing the buttons out. */}
         <div
           title={cwd}
           style={{
-            flex: 1,
+            flex: "1 1 auto",
             minWidth: 0,
-            padding: "6px 10px",
+            padding: "6px 6px 6px 10px",
             color: "var(--text-dim)",
             fontSize: 11,
             fontFamily: "var(--font-mono)",
@@ -212,7 +213,7 @@ export function FileExplorerPane({
           )}
         </ToolbarIconButton>
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", paddingBottom: 6 }}>
         <FileExplorer
           ref={explorerRef}
           cwd={cwd}

@@ -255,9 +255,9 @@ function TreeNode({
           display: "flex",
           alignItems: "center",
           gap: 4,
-          paddingLeft: 8 + depth * 14,
+          paddingLeft: 6 + depth * 12,
           paddingRight: 8,
-          height: 24,
+          height: 22,
           cursor: "pointer",
           background: hovered ? "var(--bg-hover)" : "transparent",
           borderRadius: 4,
@@ -285,6 +285,9 @@ function TreeNode({
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
             flex: 1,
+            // Without this the flex item refuses to shrink below its content
+            // width and deep paths push the tree into a horizontal scrollbar.
+            minWidth: 0,
           }}
           title={node.fullPath}
         >

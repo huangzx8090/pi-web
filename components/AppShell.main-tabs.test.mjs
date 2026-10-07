@@ -4,40 +4,36 @@ import test from "node:test";
 
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
 
-/** The main editor area: pinned chat tab + one tab per open file. */
+/** The editor area: optional tree column + pinned chat tab + one tab per file. */
 function mainEditorBlock() {
-  const start = source.indexOf("{/* Main editor tabs");
+  const start = source.indexOf("{/* Editor area: an optional file-tree column");
   const end = source.indexOf("{/* Right panel content", start);
-  assert.notEqual(start, -1, "main editor comment not found");
-  assert.notEqual(end, -1, "end of main editor block not found");
+  assert.notEqual(start, -1, "editor area comment not found");
+  assert.notEqual(end, -1, "end of editor area block not found");
   return source.slice(start, end);
 }
 
-test("the main editor area keeps pinned chat and tree tabs ahead of the open files", () => {
+test("the main editor area keeps a pinned chat tab next to the open files", () => {
   const start = source.indexOf("  const mainTabs: Tab[] = [");
   const end = source.indexOf("  const rightPanelTabs: Tab[]", start);
   assert.notEqual(start, -1, "mainTabs declaration not found");
   const tabs = source.slice(start, end);
-  // Pinned views are declared in a fixed order so they never shift when files
-  // open and close; transient file tabs come last.
   assert.match(tabs, /id: CHAT_TAB_ID, label: translate\("chat\.tab"\), filePath: "", kind: "chat", closable: false \},/);
-  assert.match(tabs, /id: EXPLORER_TAB_ID, label: translate\("files\.explorer"\), filePath: "", kind: "explorer" as const, closable: false \}/);
-  assert.ok(tabs.indexOf("CHAT_TAB_ID") < tabs.indexOf("EXPLORER_TAB_ID"));
-  assert.ok(tabs.indexOf("EXPLORER_TAB_ID") < tabs.indexOf("...fileTabs"));
-  assert.match(tabs, /\.\.\.\(explorerOpen/);
+  assert.match(tabs, /\.\.\.fileTabs,/);
+  // The file tree is a column of the editor area, not a tab in this strip.
+  assert.doesNotMatch(tabs, /EXPLORER/);
 
   const block = mainEditorBlock();
-  // The strip is up whenever there is a second view to switch to.
-  assert.match(block, /\{mainTabs\.length > 1 && \(/);
+  assert.match(block, /\{fileTabs\.length > 0 && \(/);
   assert.match(block, /<TabBar[\s\S]*?tabs=\{mainTabs\}[\s\S]*?activeTabId=\{activeContentTabId\}[\s\S]*?onSelectTab=\{setActiveContentTabId\}/);
 });
 
-test("the conversation stays mounted while a file tab or the tree is in front", () => {
+test("the conversation stays mounted while a file tab is in front", () => {
   const block = mainEditorBlock();
   // Chat is rendered whenever a session exists — hiding it must not unmount it,
   // otherwise streaming, drafts and scroll position would be lost.
   assert.match(block, /\{showChat \? \(\s*<div[\s\S]*?<ChatWindow/);
-  assert.match(block, /visibility: fileTabActive \|\| explorerTabActive \? "hidden" : "visible"/);
+  assert.match(block, /visibility: fileTabActive \? "hidden" : "visible"/);
   assert.doesNotMatch(block, /fileTabActive \? null : \(/);
 });
 
@@ -68,14 +64,15 @@ test("the right panel hosts the changes list and terminals, never file viewers",
   assert.doesNotMatch(source, /panelTabs/);
 });
 
-test("the toolbar explorer toggle moves the editor area onto the file tree", () => {
+test("the toolbar explorer button shows and hides the editor's tree column", () => {
   assert.match(
     source,
-    /const handleExplorerToggle = useCallback\(\(\) => \{[\s\S]*?if \(explorerOpen && activeContentTabId === EXPLORER_TAB_ID\) \{\s*handleExplorerOpenChange\(false\);[\s\S]*?setActiveContentTabId\(\(current\) => \(current === EXPLORER_TAB_ID \? CHAT_TAB_ID : current\)\);\s*return;\s*\}\s*handleExplorerOpenChange\(true\);\s*setActiveContentTabId\(EXPLORER_TAB_ID\);/,
+    /const handleExplorerToggle = useCallback\(\(\) => \{\s*handleExplorerOpenChange\(!explorerOpen\);\s*\}, \[explorerOpen, handleExplorerOpenChange\]\);/,
   );
-  // Leaving the tree falls back to the conversation, never to an empty area.
+  // The tree column lives beside the conversation now, so the toggle must not
+  // drag the sidebar along with it.
   const start = source.indexOf("const handleExplorerToggle");
-  const block = source.slice(start, source.indexOf("}, [explorerOpen, activeContentTabId, handleExplorerOpenChange]);", start));
+  const block = source.slice(start, source.indexOf("}, [explorerOpen, handleExplorerOpenChange]);", start));
   assert.doesNotMatch(block, /setSidebarOpen/);
   assert.match(source, /\{renderExplorerToggle\(isMobile\)\}/);
   assert.match(source, /const label = active \? translate\("files\.hideExplorer"\) : translate\("files\.showExplorer"\);/);
@@ -83,7 +80,7 @@ test("the toolbar explorer toggle moves the editor area onto the file tree", () 
 
 test("the sidebar toggle keeps addressing the sidebar it opens", () => {
   // The explorer button used to carry this hook; now that it points at the tree
-  // pane, the sidebar toggle has to declare what it controls itself.
+  // column, the sidebar toggle has to declare what it controls itself.
   const start = source.indexOf("onClick={handleSidebarToggle}");
   const button = source.slice(start, source.indexOf("</button>", start));
   assert.match(button, /aria-controls="session-sidebar"/);
@@ -91,14 +88,19 @@ test("the sidebar toggle keeps addressing the sidebar it opens", () => {
   assert.match(source, /aria-controls=\{EXPLORER_PANE_ID\}/);
 });
 
-test("the tree renders inside the editor area, not in the sidebar", () => {
+test("the tree is a resizable column inside the editor area, not a full-width view", () => {
   const block = mainEditorBlock();
-  assert.match(block, /\{explorerTabActive && explorerCwd \? \(/);
+  assert.match(block, /\{showExplorerColumn && \(/);
   assert.match(block, /id=\{EXPLORER_PANE_ID\}/);
-  assert.match(block, /<FileExplorerPane[\s\S]*?cwd=\{explorerCwd\}[\s\S]*?onOpenFile=\{handleOpenFile\}[\s\S]*?onRefresh=\{handleExplorerRefresh\}/);
+  assert.match(block, /"--explorer-column-width": `\$\{explorerColumnResizer\.width\}px`/);
+  assert.match(block, /width: "var\(--explorer-column-width\)"/);
+  assert.match(block, /<FileExplorerPane[\s\S]*?cwd=\{explorerCwd!\}[\s\S]*?onOpenFile=\{handleOpenFile\}[\s\S]*?onRefresh=\{handleExplorerRefresh\}/);
+  // A drag handle between the column and the content, and the phone fallback.
+  assert.match(block, /data-resize-handle="explorer-column"/);
+  assert.match(block, /data-explorer-layout=\{explorerColumnIsOverlay \? "overlay" : "column"\}/);
+  assert.match(source, /const explorerColumnIsOverlay = isMobile && showExplorerColumn;/);
+  assert.match(source, /const showExplorerColumn = explorerOpen && Boolean\(explorerCwd\);/);
   assert.match(source, /import \{ FileExplorerPane \} from "\.\/FileExplorerPane";/);
-  // The tree only takes over when there is a workspace to list.
-  assert.match(source, /const explorerTabActive = explorerOpen && Boolean\(explorerCwd\) && activeContentTabId === EXPLORER_TAB_ID;/);
 
   const sidebarStart = source.indexOf("<SessionSidebar");
   const sidebar = source.slice(sidebarStart, source.indexOf("onSessionsChange={handleSessionsChange}", sidebarStart));
@@ -106,6 +108,19 @@ test("the tree renders inside the editor area, not in the sidebar", () => {
   assert.doesNotMatch(sidebar, /onExplorerOpenChange=/);
   assert.doesNotMatch(sidebar, /onOpenFile=/);
   assert.doesNotMatch(sidebar, /onOpenTerminal=/);
+});
+
+test("the tree column reserves room for the conversation", () => {
+  const start = source.indexOf("  const explorerColumnResizer = useResizablePanel({");
+  const end = source.indexOf("  });", start);
+  assert.notEqual(start, -1, "explorer column resizer not found");
+  const resizer = source.slice(start, end);
+  assert.match(resizer, /getMaxWidth: getResponsiveExplorerColumnMaxWidth/);
+  assert.match(resizer, /storageKey: "pi-explorer-column-width"/);
+  assert.match(resizer, /growthDirection: "right"/);
+  assert.match(source, /getExplorerColumnMaxWidth\(\{[\s\S]*?rightPanelWidth: rightPanelWidthRef\.current,/);
+  // The right panel eats editor width, so widening it re-clamps the column.
+  assert.match(source, /reclampExplorerColumnWidth\(\);\s*\}, \[reclampExplorerColumnWidth, reclampRightPanelWidth, reclampSidebarWidth, rightPanelOpen\]\);/);
 });
 
 test("the explorer entry is a labelled toolbar button like its neighbours", () => {

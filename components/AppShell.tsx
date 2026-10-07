@@ -49,7 +49,11 @@ import {
   workspaceKeyOf,
 } from "@/lib/workspace-memory";
 import {
+  EXPLORER_COLUMN_DEFAULT_WIDTH,
+  EXPLORER_COLUMN_MAX_WIDTH,
+  EXPLORER_COLUMN_MIN_WIDTH,
   getDefaultRightPanelWidth,
+  getExplorerColumnMaxWidth,
   getRightPanelMaxWidth,
   getSidebarMaxWidth,
   RIGHT_PANEL_FALLBACK_WIDTH,
@@ -81,9 +85,7 @@ const AGENT_PANEL_WIDTH = 420;
 const CHANGES_TAB_ID = "__changes__";
 /** Pinned tab of the main editor area — the conversation itself. */
 const CHAT_TAB_ID = "__chat__";
-/** Pinned tab of the main editor area — the file tree view. */
-const EXPLORER_TAB_ID = "__explorer__";
-/** DOM id of the file-tree panel of the editor area. */
+/** DOM id of the file-tree column of the editor area. */
 const EXPLORER_PANE_ID = "file-explorer-pane";
 /** Only auto-open the changes panel when there is room to show it alongside the chat. */
 const CHANGES_AUTO_OPEN_MIN_WIDTH = 1200;
@@ -195,6 +197,7 @@ export function AppShell() {
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   const sidebarWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
   const rightPanelWidthRef = useRef(RIGHT_PANEL_FALLBACK_WIDTH);
+  const explorerColumnWidthRef = useRef(EXPLORER_COLUMN_DEFAULT_WIDTH);
   const getResponsiveRightPanelWidth = useCallback(
     () => typeof window === "undefined"
       ? RIGHT_PANEL_FALLBACK_WIDTH
@@ -221,6 +224,18 @@ export function AppShell() {
       }),
     [sidebarOpen],
   );
+  const getResponsiveExplorerColumnMaxWidth = useCallback(
+    () => typeof window === "undefined"
+      ? EXPLORER_COLUMN_MAX_WIDTH
+      : getExplorerColumnMaxWidth({
+        viewportWidth: window.innerWidth,
+        sidebarOpen,
+        sidebarWidth: sidebarWidthRef.current,
+        rightPanelOpen,
+        rightPanelWidth: rightPanelWidthRef.current,
+      }),
+    [sidebarOpen, rightPanelOpen],
+  );
   const sidebarResizer = useResizablePanel({
     ariaLabel: translate("layout.resizeSidebar"),
     cssVariable: "--sidebar-width",
@@ -244,6 +259,20 @@ export function AppShell() {
     storageKey: "pi-right-panel-width",
     widthRef: rightPanelWidthRef,
   });
+  // The file tree is a column *inside* the editor area (VSCode-style), not a
+  // full-width view: picking a file and reading it happen side by side.
+  const explorerColumnResizer = useResizablePanel({
+    ariaLabel: translate("layout.resizeExplorer"),
+    cssVariable: "--explorer-column-width",
+    defaultWidth: EXPLORER_COLUMN_DEFAULT_WIDTH,
+    getMaxWidth: getResponsiveExplorerColumnMaxWidth,
+    growthDirection: "right",
+    maxWidth: EXPLORER_COLUMN_MAX_WIDTH,
+    minWidth: EXPLORER_COLUMN_MIN_WIDTH,
+    storageKey: "pi-explorer-column-width",
+    widthRef: explorerColumnWidthRef,
+  });
+  const reclampExplorerColumnWidth = explorerColumnResizer.reclampWidth;
   const reclampSidebarWidth = sidebarResizer.reclampWidth;
   const reclampRightPanelWidth = rightPanelResizer.reclampWidth;
   // On mobile the sidebar is an overlay drawer; hide it by default so the chat
@@ -258,7 +287,10 @@ export function AppShell() {
     if (!rightPanelOpen) return;
     reclampSidebarWidth();
     reclampRightPanelWidth();
-  }, [reclampRightPanelWidth, reclampSidebarWidth, rightPanelOpen]);
+    // The tree column lives inside the editor area, so a wider right panel can
+    // squeeze it below its minimum too.
+    reclampExplorerColumnWidth();
+  }, [reclampExplorerColumnWidth, reclampRightPanelWidth, reclampSidebarWidth, rightPanelOpen]);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const [pendingQuotePrompt, setPendingQuotePrompt] = useState<{ sessionId: string; text: string } | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
@@ -477,9 +509,9 @@ export function AppShell() {
   const [rightPanelTabId, setRightPanelTabId] = useState<string>(CHANGES_TAB_ID);
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [terminalsRestored, setTerminalsRestored] = useState(false);
-  // The file tree is a view of the main editor area (it used to be a section at
-  // the bottom of the sidebar). The toolbar toggle opens/closes it and moves the
-  // editor area onto it, so one press is enough to get from chat to files.
+  // The file tree is a column inside the editor area (it used to be a section at
+  // the bottom of the sidebar, then a full-width tab). The toolbar toggle shows
+  // and hides it; picking files and reading them happen side by side.
   const [explorerOpen, setExplorerOpen] = useState(true);
   useEffect(() => {
     setExplorerOpen(loadExplorerOpen());
@@ -489,25 +521,14 @@ export function AppShell() {
     setExplorerOpen(open);
   }, []);
   const handleExplorerToggle = useCallback(() => {
-    // Three states, matching the label: in front → close, open but behind →
-    // bring to front, closed → open and show it.
-    if (explorerOpen && activeContentTabId === EXPLORER_TAB_ID) {
-      handleExplorerOpenChange(false);
-      // Leaving the tree cannot leave an empty editor area behind.
-      setActiveContentTabId((current) => (current === EXPLORER_TAB_ID ? CHAT_TAB_ID : current));
-      return;
-    }
-    handleExplorerOpenChange(true);
-    setActiveContentTabId(EXPLORER_TAB_ID);
-  }, [explorerOpen, activeContentTabId, handleExplorerOpenChange]);
+    handleExplorerOpenChange(!explorerOpen);
+  }, [explorerOpen, handleExplorerOpenChange]);
+  useEffect(() => {
+    reclampExplorerColumnWidth();
+  }, [explorerOpen, reclampExplorerColumnWidth]);
 
-  // Pinned views first (conversation, then the file tree), open files after
-  // them — that way the two permanent tabs never shift when files come and go.
   const mainTabs: Tab[] = [
     { id: CHAT_TAB_ID, label: translate("chat.tab"), filePath: "", kind: "chat", closable: false },
-    ...(explorerOpen
-      ? [{ id: EXPLORER_TAB_ID, label: translate("files.explorer"), filePath: "", kind: "explorer" as const, closable: false }]
-      : []),
     ...fileTabs,
   ];
   const rightPanelTabs: Tab[] = terminalTabs.map((tab) => ({
@@ -1342,9 +1363,12 @@ export function AppShell() {
   const activeFileTab = fileTabs.find((tab) => tab.id === activeContentTabId) ?? null;
   const fileTabActive = activeFileTab !== null && Boolean(activeFileTab.filePath);
   // The tree lists whatever workspace is on screen. Without a project there is
-  // nothing to list, so the view simply does not take over the editor area.
+  // nothing to list, so the column stays out of the way.
   const explorerCwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd ?? null;
-  const explorerTabActive = explorerOpen && Boolean(explorerCwd) && activeContentTabId === EXPLORER_TAB_ID;
+  const showExplorerColumn = explorerOpen && Boolean(explorerCwd);
+  // On a phone there is no room for two columns, so the tree becomes an overlay
+  // and the conversation keeps its layout underneath.
+  const explorerColumnIsOverlay = isMobile && showExplorerColumn;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
 
@@ -1978,7 +2002,7 @@ export function AppShell() {
   // neighbours (history / system / tools) so the row reads as one group of
   // labelled toggles.
   const renderExplorerToggle = (mobile: boolean) => {
-    const active = explorerOpen && activeContentTabId === EXPLORER_TAB_ID;
+    const active = explorerOpen;
     const label = active ? translate("files.hideExplorer") : translate("files.showExplorer");
     return (
       <button
@@ -2526,118 +2550,34 @@ export function AppShell() {
         {isMobile && renderProjectTrustWarning(true)}
         </div>
 
-        {/* Main editor tabs — the conversation, the file tree and every open file (VSCode-style) */}
-        {mainTabs.length > 1 && (
-          <div style={{ flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)" }}>
-            <TabBar
-              tabs={mainTabs}
-              activeTabId={activeContentTabId}
-              onSelectTab={setActiveContentTabId}
-              onCloseTab={handleCloseFileTab}
-            />
-          </div>
-        )}
-
-        {/* Chat content */}
-        <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
-          {showChat ? (
+        {/* Editor area: an optional file-tree column next to the tabbed content */}
+        <div style={{ flex: 1, display: "flex", minWidth: 0, overflow: "hidden", position: "relative" }}>
+          {showExplorerColumn && (
             <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                display: "flex",
-                flexDirection: "column",
-                // The conversation keeps streaming while another view (a file or
-                // the tree) is in front, so it is hidden with visibility
-                // instead of being unmounted.
-                visibility: fileTabActive || explorerTabActive ? "hidden" : "visible",
-              }}
-            >
-              <ChatWindow
-                key={sessionKey}
-                session={selectedSession}
-                searchTarget={searchTarget?.sessionId === selectedSession?.id ? searchTarget : null}
-                onSearchTargetHandled={handleSearchTargetHandled}
-                initialScrollPosition={selectedSession ? sessionScrollPositionsRef.current.get(selectedSession.id) ?? null : null}
-                onScrollPositionChange={handleSessionScrollPositionChange}
-                sessionRunning={Boolean(selectedSession && runningSessionIds.has(selectedSession.id))}
-                newSessionCwd={effectiveNewSessionCwd}
-                newSessionDraftKey={newSessionDraftKey}
-                onAgentEnd={handleAgentEnd}
-                onAttentionNeeded={handleAttentionNeeded}
-                onSessionCreated={handleSessionCreated}
-                onSessionForked={handleSessionForked}
-                modelsRefreshKey={modelsRefreshKey}
-                chatInputRef={chatInputRef}
-                onBranchDataChange={handleBranchDataChange}
-                onSystemPromptChange={handleSystemPromptChange}
-                onSystemToolsChange={handleSystemToolsChange}
-                onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
-                onSessionStatsChange={handleSessionStatsChange}
-                onSessionStatsPanelOpen={openSessionStatsPanel}
-                onContextUsageChange={handleContextUsageChange}
-                onOpenFile={handleOpenLinkedFile}
-                onOpenSession={handleOpenSession}
-                onAskInNewChat={handleAskInNewChat}
-                quoteSelectionEnabled={quoteSelectionEnabled}
-                initialPrompt={pendingQuotePrompt?.sessionId === selectedSession?.id ? pendingQuotePrompt?.text : undefined}
-                onInitialPromptConsumed={() => setPendingQuotePrompt(null)}
-                soundEnabled={soundEnabled}
-                onSoundToggle={onSoundToggle}
-                playDoneSound={playDoneSound}
-                unlockAudio={unlockAudio}
-              />
-            </div>
-          ) : initialCwdStatus === "validating" ? (
-            <div
-              role="status"
-              style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
-            >
-               <div style={{ fontSize: 14, color: "var(--text)" }}>{translate("workspace.opening")}</div>
-              <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                {initialNavigation.requestedCwd}
-              </div>
-            </div>
-          ) : initialCwdStatus === "error" ? (
-            <div
-              role="alert"
-              style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
-            >
-               <div style={{ fontSize: 14, color: "#dc2626" }}>{translate("workspace.unable")}</div>
-              <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                {initialNavigation.requestedCwd}
-              </div>
-              <div style={{ maxWidth: 720, fontSize: 12 }}>{initialCwdError}</div>
-            </div>
-          ) : showPlaceholder ? (
-            activeCwd ? (
-              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 15 }}>
-                 {translate("workspace.selectSession")}
-              </div>
-            ) : (
-              <div style={{ position: "absolute", top: 12, left: 12, display: "flex", alignItems: "flex-start", gap: 8, userSelect: "none", pointerEvents: "none" }}>
-                <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7, flexShrink: 0 }}>
-                  <line x1="20" y1="12" x2="4" y2="12" /><polyline points="10 6 4 12 10 18" />
-                </svg>
-                <div>
-                   <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>{translate("workspace.getStarted")}</div>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.8 }}>
-                     <span style={{ color: "var(--text-dim)", marginRight: 6 }}>1.</span>{translate("workspace.selectProject")}<br />
-                     <span style={{ color: "var(--text-dim)", marginRight: 6 }}>2.</span>{translate("workspace.addModels")}
-                  </div>
-                </div>
-              </div>
-            )
-          ) : null}
-          {/* The file tree takes over the editor area while its tab is active. */}
-          {explorerTabActive && explorerCwd ? (
-            <div
+              ref={explorerColumnResizer.panelRef}
               id={EXPLORER_PANE_ID}
               data-testid="file-explorer-pane"
-              style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column" }}
+              data-explorer-layout={explorerColumnIsOverlay ? "overlay" : "column"}
+              style={explorerColumnIsOverlay ? {
+                position: "absolute",
+                inset: 0,
+                zIndex: 300,
+                display: "flex",
+                flexDirection: "column",
+                background: "var(--bg-panel)",
+              } : {
+                "--explorer-column-width": `${explorerColumnResizer.width}px`,
+                width: "var(--explorer-column-width)",
+                flexShrink: 0,
+                minWidth: 0,
+                display: "flex",
+                flexDirection: "column",
+                background: "var(--bg-panel)",
+                borderRight: "1px solid var(--border)",
+              } as React.CSSProperties}
             >
               <FileExplorerPane
-                cwd={explorerCwd}
+                cwd={explorerCwd!}
                 onOpenFile={handleOpenFile}
                 onOpenTerminal={handleOpenTerminal}
                 onAtMention={handleAtMention}
@@ -2646,37 +2586,154 @@ export function AppShell() {
                 onRefresh={handleExplorerRefresh}
               />
             </div>
-          ) : null}
-          {/* Only the active file tab mounts a viewer. Lightweight per-tab state
-              lives in AppShell and is restored on activation. */}
-          {fileTabActive && activeFileTab ? (
-            <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column" }}>
-              <FileViewer
-                key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
-                filePath={activeFileTab.filePath}
-                cwd={activeCwd ?? undefined}
-                sourceSessionId={activeFileTab.sourceSessionId}
-                gitRefreshKey={explorerRefreshKey}
-                initialDisplayMode={activeFileTab.initialDisplayMode}
-                initialPage={activeFileTab.page}
-                initialState={activeFileTab.viewerState}
-                // Only watch while the tab is actually on screen.
-                watchEnabled={!rightPanelFullWidth}
-                onStateChange={(viewerState) => handleFileViewerStateChange(
-                  activeFileTab.id,
-                  activeFileTab.viewerRevision ?? 0,
-                  viewerState,
-                )}
-                onMentionLines={handleFileLineMention}
-                onAtMention={handleAtMention}
-                onOpenFile={(filePath, page) => handleOpenFile(
-                  filePath,
-                  getFileName(filePath),
-                  { sourceSessionId: activeFileTab.sourceSessionId, page },
-                )}
+          )}
+          {showExplorerColumn && !explorerColumnIsOverlay && (
+            <div
+              {...explorerColumnResizer.separatorProps}
+              className={`panel-resize-handle explorer-column-resize-handle${explorerColumnResizer.isResizing ? " is-resizing" : ""}`}
+              data-resize-handle="explorer-column"
+              title={`${translate("layout.resizeExplorer")}: ${translate("layout.resizeHint")}`}
+            />
+          )}
+
+          <div
+            data-testid="editor-content"
+            style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}
+          >
+          {/* Main editor tabs — the conversation plus every open file (VSCode-style) */}
+          {fileTabs.length > 0 && (
+            <div style={{ flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)" }}>
+              <TabBar
+                tabs={mainTabs}
+                activeTabId={activeContentTabId}
+                onSelectTab={setActiveContentTabId}
+                onCloseTab={handleCloseFileTab}
               />
             </div>
-          ) : null}
+          )}
+
+          {/* Chat content */}
+          <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+            {showChat ? (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  // The conversation keeps streaming while a file tab is in front,
+                  // so it is hidden with visibility instead of being unmounted.
+                  visibility: fileTabActive ? "hidden" : "visible",
+                }}
+              >
+                <ChatWindow
+                  key={sessionKey}
+                  session={selectedSession}
+                  searchTarget={searchTarget?.sessionId === selectedSession?.id ? searchTarget : null}
+                  onSearchTargetHandled={handleSearchTargetHandled}
+                  initialScrollPosition={selectedSession ? sessionScrollPositionsRef.current.get(selectedSession.id) ?? null : null}
+                  onScrollPositionChange={handleSessionScrollPositionChange}
+                  sessionRunning={Boolean(selectedSession && runningSessionIds.has(selectedSession.id))}
+                  newSessionCwd={effectiveNewSessionCwd}
+                  newSessionDraftKey={newSessionDraftKey}
+                  onAgentEnd={handleAgentEnd}
+                  onAttentionNeeded={handleAttentionNeeded}
+                  onSessionCreated={handleSessionCreated}
+                  onSessionForked={handleSessionForked}
+                  modelsRefreshKey={modelsRefreshKey}
+                  chatInputRef={chatInputRef}
+                  onBranchDataChange={handleBranchDataChange}
+                  onSystemPromptChange={handleSystemPromptChange}
+                  onSystemToolsChange={handleSystemToolsChange}
+                  onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
+                  onSessionStatsChange={handleSessionStatsChange}
+                  onSessionStatsPanelOpen={openSessionStatsPanel}
+                  onContextUsageChange={handleContextUsageChange}
+                  onOpenFile={handleOpenLinkedFile}
+                  onOpenSession={handleOpenSession}
+                  onAskInNewChat={handleAskInNewChat}
+                  quoteSelectionEnabled={quoteSelectionEnabled}
+                  initialPrompt={pendingQuotePrompt?.sessionId === selectedSession?.id ? pendingQuotePrompt?.text : undefined}
+                  onInitialPromptConsumed={() => setPendingQuotePrompt(null)}
+                  soundEnabled={soundEnabled}
+                  onSoundToggle={onSoundToggle}
+                  playDoneSound={playDoneSound}
+                  unlockAudio={unlockAudio}
+                />
+              </div>
+            ) : initialCwdStatus === "validating" ? (
+              <div
+                role="status"
+                style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
+              >
+                 <div style={{ fontSize: 14, color: "var(--text)" }}>{translate("workspace.opening")}</div>
+                <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                  {initialNavigation.requestedCwd}
+                </div>
+              </div>
+            ) : initialCwdStatus === "error" ? (
+              <div
+                role="alert"
+                style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
+              >
+                 <div style={{ fontSize: 14, color: "#dc2626" }}>{translate("workspace.unable")}</div>
+                <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                  {initialNavigation.requestedCwd}
+                </div>
+                <div style={{ maxWidth: 720, fontSize: 12 }}>{initialCwdError}</div>
+              </div>
+            ) : showPlaceholder ? (
+              activeCwd ? (
+                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 15 }}>
+                   {translate("workspace.selectSession")}
+                </div>
+              ) : (
+                <div style={{ position: "absolute", top: 12, left: 12, display: "flex", alignItems: "flex-start", gap: 8, userSelect: "none", pointerEvents: "none" }}>
+                  <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7, flexShrink: 0 }}>
+                    <line x1="20" y1="12" x2="4" y2="12" /><polyline points="10 6 4 12 10 18" />
+                  </svg>
+                  <div>
+                     <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>{translate("workspace.getStarted")}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.8 }}>
+                       <span style={{ color: "var(--text-dim)", marginRight: 6 }}>1.</span>{translate("workspace.selectProject")}<br />
+                       <span style={{ color: "var(--text-dim)", marginRight: 6 }}>2.</span>{translate("workspace.addModels")}
+                    </div>
+                  </div>
+                </div>
+              )
+            ) : null}
+            {/* Only the active file tab mounts a viewer. Lightweight per-tab state
+                lives in AppShell and is restored on activation. */}
+            {fileTabActive && activeFileTab ? (
+              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column" }}>
+                <FileViewer
+                  key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
+                  filePath={activeFileTab.filePath}
+                  cwd={activeCwd ?? undefined}
+                  sourceSessionId={activeFileTab.sourceSessionId}
+                  gitRefreshKey={explorerRefreshKey}
+                  initialDisplayMode={activeFileTab.initialDisplayMode}
+                  initialPage={activeFileTab.page}
+                  initialState={activeFileTab.viewerState}
+                  // Only watch while the tab is actually on screen.
+                  watchEnabled={!rightPanelFullWidth}
+                  onStateChange={(viewerState) => handleFileViewerStateChange(
+                    activeFileTab.id,
+                    activeFileTab.viewerRevision ?? 0,
+                    viewerState,
+                  )}
+                  onMentionLines={handleFileLineMention}
+                  onAtMention={handleAtMention}
+                  onOpenFile={(filePath, page) => handleOpenFile(
+                    filePath,
+                    getFileName(filePath),
+                    { sourceSessionId: activeFileTab.sourceSessionId, page },
+                  )}
+                />
+              </div>
+            ) : null}
+          </div>
+          </div>
         </div>
       </div>
 

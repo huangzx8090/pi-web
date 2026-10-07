@@ -209,6 +209,7 @@ export const enLocale: LocalePlugin = {
     "files.hideExplorer": "Hide file explorer",
     "files.noneOpen": "No file open",
     "layout.resizeSidebar": "Resize sidebar",
+    "layout.resizeExplorer": "Resize file explorer",
     "layout.resizeFilePanel": "Resize file panel",
     "layout.resizeHint": "Drag to resize. Double-click or press Enter to reset.",
     "sidebar.new": "New",
