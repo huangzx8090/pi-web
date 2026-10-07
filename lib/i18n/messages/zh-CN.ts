@@ -207,6 +207,8 @@ export const zhCNLocale: LocalePlugin = {
     "files.showPanel": "显示文件面板",
     "files.showExplorer": "显示文件浏览器",
     "files.hideExplorer": "隐藏文件浏览器",
+    "files.collapseExplorer": "收起文件浏览器",
+    "files.expandExplorer": "展开文件浏览器",
     "files.noneOpen": "没有打开的文件",
     "layout.resizeSidebar": "调整侧边栏宽度",
     "layout.resizeExplorer": "调整文件浏览器宽度",

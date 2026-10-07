@@ -6,9 +6,10 @@ import { useI18n } from "@/hooks/useI18n";
 import { getFileName } from "@/lib/file-paths";
 
 /**
- * The file tree as a panel of the main editor area (it used to live at the
- * bottom of the sidebar). Everything it needs is local state: the tree's own
- * refresh counter, upload busy flag, change count badge and in-tree search.
+ * The file tree as a foldable column of the main editor area (it used to live at
+ * the bottom of the sidebar, then as a full-width tab). Everything it needs is
+ * local state: the tree's own refresh counter, upload busy flag, change count
+ * badge and in-tree search.
  */
 interface Props {
   cwd: string;
@@ -24,6 +25,8 @@ interface Props {
   refreshKey?: number;
   /** Shell handler for the refresh button; falls back to a local re-list. */
   onRefresh?: () => void;
+  /** Folds the column away; the shell keeps the handle that brings it back. */
+  onCollapse?: () => void;
 }
 
 function ToolbarIconButton({
@@ -93,6 +96,7 @@ export function FileExplorerPane({
   onAtMentions,
   refreshKey,
   onRefresh,
+  onCollapse,
 }: Props) {
   const { t } = useI18n();
   const [localKey, setLocalKey] = useState(0);
@@ -212,6 +216,20 @@ export function FileExplorerPane({
             </svg>
           )}
         </ToolbarIconButton>
+        {onCollapse && (
+          <ToolbarIconButton
+            onClick={onCollapse}
+            title={t("files.collapseExplorer")}
+            color="var(--text-dim)"
+            marginRight={6}
+          >
+            {/* Double chevron pointing at the edge the column folds into. */}
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="12 17 7 12 12 7" />
+              <polyline points="18 17 13 12 18 7" />
+            </svg>
+          </ToolbarIconButton>
+        )}
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", paddingBottom: 6 }}>
         <FileExplorer

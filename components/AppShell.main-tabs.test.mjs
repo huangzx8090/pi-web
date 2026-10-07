@@ -3,10 +3,11 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
+const explorerPaneSource = await readFile(new URL("./FileExplorerPane.tsx", import.meta.url), "utf8");
 
 /** The editor area: optional tree column + pinned chat tab + one tab per file. */
 function mainEditorBlock() {
-  const start = source.indexOf("{/* Editor area: an optional file-tree column");
+  const start = source.indexOf("{/* Editor area: ");
   const end = source.indexOf("{/* Right panel content", start);
   assert.notEqual(start, -1, "editor area comment not found");
   assert.notEqual(end, -1, "end of editor area block not found");
@@ -108,6 +109,22 @@ test("the tree is a resizable column inside the editor area, not a full-width vi
   assert.doesNotMatch(sidebar, /onExplorerOpenChange=/);
   assert.doesNotMatch(sidebar, /onOpenFile=/);
   assert.doesNotMatch(sidebar, /onOpenTerminal=/);
+});
+
+test("folding the tree leaves only a thin handle on the editor's left edge", () => {
+  assert.match(source, /const EXPLORER_HANDLE_WIDTH = 22;/);
+  assert.match(source, /const explorerHandleVisible = !explorerOpen && Boolean\(explorerCwd\) && !isMobile;/);
+  assert.match(source, /\{explorerHandleVisible && \(/);
+  assert.match(source, /data-testid="explorer-handle"/);
+  assert.match(source, /onClick=\{\(\) => handleExplorerOpenChange\(true\)\}/);
+  assert.match(source, /width: EXPLORER_HANDLE_WIDTH/);
+  // The column carries its own fold button, so the handle is not the only way out.
+  assert.match(source, /onCollapse=\{\(\) => handleExplorerOpenChange\(false\)\}/);
+  assert.match(explorerPaneSource, /title=\{t\("files\.collapseExplorer"\)\}/);
+  assert.match(explorerPaneSource, /\{onCollapse && \(/);
+  // Folded by default: the column is opt-in, not a permanent fixture.
+  assert.match(source, /const \[explorerOpen, setExplorerOpen\] = useState\(false\);/);
+  assert.match(source, /setExplorerOpen\(loadExplorerOpen\(\)\)/);
 });
 
 test("the tree column reserves room for the conversation", () => {

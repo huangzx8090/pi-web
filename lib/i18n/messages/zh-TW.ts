@@ -207,6 +207,8 @@ export const zhTWLocale: LocalePlugin = {
     "files.showPanel": "顯示檔案面板",
     "files.showExplorer": "顯示檔案瀏覽器",
     "files.hideExplorer": "隱藏檔案瀏覽器",
+    "files.collapseExplorer": "收合檔案瀏覽器",
+    "files.expandExplorer": "展開檔案瀏覽器",
     "files.noneOpen": "沒有開啟的檔案",
     "layout.resizeSidebar": "調整側邊欄寬度",
     "layout.resizeExplorer": "調整檔案瀏覽器寬度",

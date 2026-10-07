@@ -87,6 +87,8 @@ const CHANGES_TAB_ID = "__changes__";
 const CHAT_TAB_ID = "__chat__";
 /** DOM id of the file-tree column of the editor area. */
 const EXPLORER_PANE_ID = "file-explorer-pane";
+/** Width of the thin handle left behind when the tree column is folded away. */
+const EXPLORER_HANDLE_WIDTH = 22;
 /** Only auto-open the changes panel when there is room to show it alongside the chat. */
 const CHANGES_AUTO_OPEN_MIN_WIDTH = 1200;
 
@@ -512,7 +514,10 @@ export function AppShell() {
   // The file tree is a column inside the editor area (it used to be a section at
   // the bottom of the sidebar, then a full-width tab). The toolbar toggle shows
   // and hides it; picking files and reading them happen side by side.
-  const [explorerOpen, setExplorerOpen] = useState(true);
+  // Folded by default — the column is opt-in. Starting from `false` also matches
+  // what the server renders (no storage there), so hydrating does not flash the
+  // column in and out for everyone who keeps it folded.
+  const [explorerOpen, setExplorerOpen] = useState(false);
   useEffect(() => {
     setExplorerOpen(loadExplorerOpen());
   }, []);
@@ -1369,6 +1374,9 @@ export function AppShell() {
   // On a phone there is no room for two columns, so the tree becomes an overlay
   // and the conversation keeps its layout underneath.
   const explorerColumnIsOverlay = isMobile && showExplorerColumn;
+  // Folded away, the tree leaves only a thin handle pinned to the left edge of
+  // the editor area. Phones keep the toolbar button instead of the handle.
+  const explorerHandleVisible = !explorerOpen && Boolean(explorerCwd) && !isMobile;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
 
@@ -2550,8 +2558,50 @@ export function AppShell() {
         {isMobile && renderProjectTrustWarning(true)}
         </div>
 
-        {/* Editor area: an optional file-tree column next to the tabbed content */}
+        {/* Editor area: a foldable file-tree column next to the tabbed content */}
         <div style={{ flex: 1, display: "flex", minWidth: 0, overflow: "hidden", position: "relative" }}>
+          {explorerHandleVisible && (
+            <button
+              type="button"
+              onClick={() => handleExplorerOpenChange(true)}
+              data-testid="explorer-handle"
+              title={translate("files.expandExplorer")}
+              aria-label={translate("files.expandExplorer")}
+              aria-controls={EXPLORER_PANE_ID}
+              aria-expanded={false}
+              onMouseEnter={(event) => { event.currentTarget.style.background = "var(--bg-hover)"; }}
+              onMouseLeave={(event) => { event.currentTarget.style.background = "var(--bg-panel)"; }}
+              style={{
+                flexShrink: 0,
+                width: EXPLORER_HANDLE_WIDTH,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 8,
+                padding: "9px 0",
+                background: "var(--bg-panel)",
+                border: "none",
+                borderRight: "1px solid var(--border)",
+                color: "var(--text-dim)",
+                cursor: "pointer",
+                transition: "background 0.12s, color 0.12s",
+              }}
+            >
+              {/* Pointing right, the way the column will unfold. */}
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="7 7 12 12 7 17" />
+                <polyline points="13 7 18 12 13 17" />
+              </svg>
+              <span style={{
+                writingMode: "vertical-rl",
+                fontSize: 10,
+                letterSpacing: "0.14em",
+                whiteSpace: "nowrap",
+              }}>
+                {translate("files.explorer")}
+              </span>
+            </button>
+          )}
           {showExplorerColumn && (
             <div
               ref={explorerColumnResizer.panelRef}
@@ -2584,6 +2634,7 @@ export function AppShell() {
                 onAtMentions={handleAtMentions}
                 refreshKey={explorerRefreshKey}
                 onRefresh={handleExplorerRefresh}
+                onCollapse={() => handleExplorerOpenChange(false)}
               />
             </div>
           )}

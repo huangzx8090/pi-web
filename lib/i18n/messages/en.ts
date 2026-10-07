@@ -207,6 +207,8 @@ export const enLocale: LocalePlugin = {
     "files.showPanel": "Show file panel",
     "files.showExplorer": "Show file explorer",
     "files.hideExplorer": "Hide file explorer",
+    "files.collapseExplorer": "Fold file explorer",
+    "files.expandExplorer": "Unfold file explorer",
     "files.noneOpen": "No file open",
     "layout.resizeSidebar": "Resize sidebar",
     "layout.resizeExplorer": "Resize file explorer",

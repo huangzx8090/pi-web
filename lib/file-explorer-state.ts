@@ -1,4 +1,8 @@
-const EXPLORER_OPEN_STORAGE_KEY = "pi-web:file-explorer:open";
+// The stored flag changed meaning with the layout: it used to say "the sidebar
+// section is open" (default true), now it says "the editor's tree column is
+// expanded" (default false). A fresh key keeps the old always-on preference
+// from overriding the new, folded-by-default intent.
+const EXPLORER_OPEN_STORAGE_KEY = "pi-web:file-explorer:expanded";
 
 interface StorageLike {
   getItem(key: string): string | null;
@@ -15,11 +19,11 @@ function getBrowserStorage(): StorageLike | null {
 }
 
 export function loadExplorerOpen(storage: StorageLike | null = getBrowserStorage()): boolean {
-  if (!storage) return true;
+  if (!storage) return false;
   try {
-    return storage.getItem(EXPLORER_OPEN_STORAGE_KEY) !== "false";
+    return storage.getItem(EXPLORER_OPEN_STORAGE_KEY) === "true";
   } catch {
-    return true;
+    return false;
   }
 }
 
