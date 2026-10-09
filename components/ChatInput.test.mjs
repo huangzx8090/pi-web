@@ -397,7 +397,44 @@ test("renders the compact composer with the standard Send button and no session 
   assert.match(html, /<textarea/);
   assert.match(html, />Send<\/button>/);
   assert.equal((html.match(/<button\b/g) ?? []).length, 1);
-  assert.doesNotMatch(html, /type="file"|Attach image|Change tool preset/);
+  assert.doesNotMatch(html, /type="file"|Attach files|Change tool preset/);
+});
+
+test("the attach button takes any file when the chat handles them, and images only otherwise (#1101)", () => {
+  const render = (props) => renderToStaticMarkup(
+    React.createElement(I18nProvider, null, React.createElement(ChatInput, {
+      onSend() {}, onAbort() {}, isStreaming: false, ...props,
+    })),
+  );
+  const fileInput = (html) => html.match(/<input[^>]*type="file"[^>]*>/)?.[0] ?? "";
+
+  const html = render({ onAttachFiles() {} });
+  assert.match(html, /title="Attach files"/);
+  assert.match(fileInput(html), /multiple=""/);
+  // No accept list and no capture: phones offer files, the photo library and the camera.
+  assert.doesNotMatch(fileInput(html), /accept=|capture=/);
+
+  assert.match(fileInput(render({})), /accept="image\/\*"/);
+});
+
+test("picked files go to the chat's attach handler, or attach as images without one (#1101)", () => {
+  const photo = new File(["x"], "photo.png", { type: "image/png" });
+  const report = new File(["x"], "report.pdf", { type: "application/pdf" });
+  const pick = (context) => {
+    const calls = { attached: [], images: [] };
+    const target = { files: [photo, report], value: "C:\\fakepath\\photo.png" };
+    chatInputCallback("handleFilePick", {
+      processImageFiles: (files) => calls.images.push([...files]),
+      ...context(calls),
+    })({ target });
+    return { ...calls, value: target.value };
+  };
+
+  assert.deepEqual(
+    pick((calls) => ({ onAttachFiles: (files) => calls.attached.push([...files]) })),
+    { attached: [[photo, report]], images: [], value: "" },
+  );
+  assert.deepEqual(pick(() => ({ onAttachFiles: undefined })), { attached: [], images: [[photo, report]], value: "" });
 });
 
 test("shows and locks the optimistic model while a switch is pending", () => {
@@ -805,3 +842,19 @@ test("renders image warnings for known text-only defaults without an explicit mo
     clearDraft(draftKey);
   }
 });
+
+// Extracted from upstream #1101: run a useCallback body in isolation so the
+// file-pick handler can be exercised without mounting the component.
+function chatInputCallback(name, context) {
+  const sourceText = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const source = ts.createSourceFile("ChatInput.tsx", sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  function findCallback(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === name) {
+      return node.initializer.arguments[0];
+    }
+    return ts.forEachChild(node, findCallback);
+  }
+  return new Script(ts.transpileModule(findCallback(source).getText(source), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText).runInNewContext(context);
+}
