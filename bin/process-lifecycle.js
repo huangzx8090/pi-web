@@ -16,7 +16,9 @@ function wireChildProcessLifecycle(
   parentProcess = process,
   timeoutMs = shutdownTimeoutMs,
   log = console.error,
+  options = {},
 ) {
+  const { onUnexpectedExit } = options;
   const signalHandlers = new Map();
   let shutdownTimer;
   // Set once we forward a signal, so an exit we asked for stays quiet and one
@@ -72,6 +74,11 @@ function wireChildProcessLifecycle(
       log(
         `[pi-web] Next.js exited unexpectedly (${signal ? `signal ${signal}` : `code ${code}`})`,
       );
+
+      // A supervisor can take over instead of letting the wrapper die here
+      // (`bin/pi-web.js` restarts the child). Returning true means "handled";
+      // without a handler we keep the original behavior and bail out.
+      if (onUnexpectedExit && onUnexpectedExit(code, signal)) return;
     }
 
     parentProcess.exit(code ?? getSignalExitCode(signal));

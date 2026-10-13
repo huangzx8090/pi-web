@@ -12,6 +12,8 @@ if (!isNodeVersionSupported(process.versions.node)) {
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { spawn } = require("child_process");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+const os = require("os");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require("path");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require("fs");
@@ -81,56 +83,127 @@ if (!loopbackHostnames.has(hostname)) {
 const nextArgs = ["start", "-p", port];
 nextArgs.push("-H", hostname);
 
-// Always run next's JS entry with node directly — avoids .bin symlink issues
-// and path-with-spaces problems on Windows when shell: true is used.
-const child = spawn(process.execPath, getNextNodeArgs(nextBin, nextArgs), {
-  cwd: pkgDir,
-  stdio: ["inherit", "pipe", "inherit"],
-  env: { ...process.env, PI_WEB_HOSTNAME: hostname, PI_WEB_CWD: process.env.PI_WEB_CWD || process.cwd() },
-});
-wireChildProcessLifecycle(child);
-
-let browserOpened = false;
 const url = `http://${hostname}:${port}`;
+let browserOpened = false;
 
-child.stdout.on("data", (chunk) => {
-  const text = chunk.toString();
-  process.stdout.write(text);
-  if (openBrowser && !browserOpened && text.includes("Ready")) {
-    browserOpened = true;
-    const isWindows = process.platform === "win32";
-    const isMac = process.platform === "darwin";
-    // Avoid `shell: true` to suppress Node.js DEP0190 deprecation
-    // ("Passing args to a child process with shell option true can lead to
-    // security vulnerabilities, as the arguments are not escaped").
-    // Pass a structured argv so Node.js handles escaping instead of
-    // concatenating the args into a shell command string.
-    let opener;
-    if (isWindows) {
-      // `start` is a cmd.exe built-in, so invoke cmd directly. The empty
-      // title argument is required by `start` before the target URL.
-      opener = spawn(process.env.ComSpec || "cmd.exe", ["/c", "start", "", url], {
-        stdio: "ignore",
-        detached: true,
-      });
-    } else if (isMac) {
-      const launchCwd = process.env.PI_WEB_CWD || process.cwd();
-      const appUrl = `${url}/?cwd=${encodeURIComponent(launchCwd)}`;
-      opener = spawn("open", ["-na", "Google Chrome", "--args", `--app=${appUrl}`], {
-        stdio: "ignore",
-        detached: true,
-      });
-    } else {
-      opener = spawn("xdg-open", [url], {
-        stdio: "ignore",
-        detached: true,
-      });
+// --- Pid file ---------------------------------------------------------------
+// The stop helpers (launch.sh / ~/.zshrc / rebuild.sh, via pi-web-lifecycle.zsh)
+// need to signal *this* wrapper, not just the listening `next start` child —
+// otherwise the supervisor below treats a requested stop as a crash and brings
+// the child right back. A pid file is more reliable than looking the parent up
+// with `ps`, which is not available in every environment.
+const pidFile = path.join(
+  process.env.HOME || os.homedir(),
+  `.pi-web-${port}.pid`,
+);
+let pidFileOwned = false;
+try {
+  fs.writeFileSync(pidFile, `${process.pid}\n`);
+  pidFileOwned = true;
+} catch {
+  // Best effort: without it a stop falls back to ending the listening child.
+}
+
+process.on("exit", () => {
+  if (!pidFileOwned) return;
+  try {
+    // Only remove a file that still belongs to us, so a newer instance's pid
+    // file is never deleted by an older process shutting down.
+    if (fs.readFileSync(pidFile, "utf8").trim() === String(process.pid)) {
+      fs.rmSync(pidFile, { force: true });
     }
-
-    opener.on("error", (error) => {
-      console.warn(`Could not open browser automatically: ${error.message}`);
-    });
-
-    opener.unref();
+  } catch {
+    // Nothing left to clean up.
   }
 });
+
+// --- Supervisor -------------------------------------------------------------
+// `bin/process-lifecycle.js` makes the wrapper die together with its child, so
+// a crashed `next start` used to take the whole server down until someone
+// relaunched it by hand. An *unexpected* child exit is retried here instead.
+// A shutdown we asked for (SIGTERM/SIGINT, e.g. `pi-web-stop`) still exits for
+// good, which is why the stop helpers also signal this wrapper, not just the
+// listening child.
+const RESTART_DELAY_MS = 500;
+const RESTART_WINDOW_MS = 60_000;
+const MAX_RESTARTS_PER_WINDOW = 5;
+const restartTimestamps = [];
+
+function scheduleRestart() {
+  const now = Date.now();
+  while (restartTimestamps.length > 0 && now - restartTimestamps[0] > RESTART_WINDOW_MS) {
+    restartTimestamps.shift();
+  }
+
+  if (restartTimestamps.length >= MAX_RESTARTS_PER_WINDOW) {
+    console.error(
+      `[pi-web] Next.js crashed ${restartTimestamps.length} times in under a minute; giving up so the port stops flapping. Read the log above, then run \`pi-web-stop && pi\`.`,
+    );
+    process.exit(1);
+  }
+
+  restartTimestamps.push(now);
+  setTimeout(startChild, RESTART_DELAY_MS);
+  return true;
+}
+
+function startChild() {
+  // Always run next's JS entry with node directly — avoids .bin symlink issues
+  // and path-with-spaces problems on Windows when shell: true is used.
+  const child = spawn(process.execPath, getNextNodeArgs(nextBin, nextArgs), {
+    cwd: pkgDir,
+    stdio: ["inherit", "pipe", "inherit"],
+    env: { ...process.env, PI_WEB_HOSTNAME: hostname, PI_WEB_CWD: process.env.PI_WEB_CWD || process.cwd() },
+  });
+  wireChildProcessLifecycle(child, process, undefined, console.error, {
+    onUnexpectedExit: scheduleRestart,
+  });
+  watchChildForReady(child);
+}
+
+function watchChildForReady(child) {
+  child.stdout.on("data", (chunk) => {
+    const text = chunk.toString();
+    process.stdout.write(text);
+    if (openBrowser && !browserOpened && text.includes("Ready")) {
+      browserOpened = true;
+      const isWindows = process.platform === "win32";
+      const isMac = process.platform === "darwin";
+      // Avoid `shell: true` to suppress Node.js DEP0190 deprecation
+      // ("Passing args to a child process with shell option true can lead to
+      // security vulnerabilities, as the arguments are not escaped").
+      // Pass a structured argv so Node.js handles escaping instead of
+      // concatenating the args into a shell command string.
+      let opener;
+      if (isWindows) {
+        // `start` is a cmd.exe built-in, so invoke cmd directly. The empty
+        // title argument is required by `start` before the target URL.
+        opener = spawn(process.env.ComSpec || "cmd.exe", ["/c", "start", "", url], {
+          stdio: "ignore",
+          detached: true,
+        });
+      } else if (isMac) {
+        const launchCwd = process.env.PI_WEB_CWD || process.cwd();
+        const appUrl = `${url}/?cwd=${encodeURIComponent(launchCwd)}`;
+        opener = spawn("open", ["-na", "Google Chrome", "--args", `--app=${appUrl}`], {
+          stdio: "ignore",
+          detached: true,
+        });
+      } else {
+        opener = spawn("xdg-open", [url], {
+          stdio: "ignore",
+          detached: true,
+        });
+      }
+
+      opener.on("error", (error) => {
+        console.warn(`Could not open browser automatically: ${error.message}`);
+      });
+
+      opener.unref();
+    }
+  });
+}
+
+startChild();
+
