@@ -1276,6 +1276,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       ...group,
       families: group.families.filter((family) => !archivedSessionIds.has(family.root.id)),
     })), [allProjectGroups, archivedProjectKeys, archivedSessionIds]);
+
+  // Codex 的分带：置顶的项目连同它的会话一起进「置顶」，剩下的才留在「项目」。
+  const pinnedProjectKeySet = useMemo(() => new Set(pinnedProjects), [pinnedProjects]);
+  const pinnedProjectGroups = useMemo(
+    () => projectGroups.filter((group) => pinnedProjectKeySet.has(group.key)),
+    [projectGroups, pinnedProjectKeySet],
+  );
+  const unpinnedProjectGroups = useMemo(
+    () => projectGroups.filter((group) => !pinnedProjectKeySet.has(group.key)),
+    [projectGroups, pinnedProjectKeySet],
+  );
   const archivedProjectGroups = useMemo(
     () => allProjectGroups.filter((group) => archivedProjectKeys.has(group.key)),
     [allProjectGroups, archivedProjectKeys],
@@ -1321,6 +1332,261 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     && selectedCwd
     && selectedProject?.key === worktreeState.projectKey
   );
+
+  const renderProjectGroup = (group: (typeof projectGroups)[number]) => {          const isExpanded = expandedProjects[group.key] !== false;
+          const showAll = showAllProjects[group.key] === true;
+          const canCollapse = group.families.length > PROJECT_COLLAPSE_LIMIT;
+          const visibleFamilies = getVisibleProjectFamilies(group.families, { isExpanded, showAll });
+          const hiddenCount = group.families.length - visibleFamilies.length;
+          const activity = projectActivity.get(group.key);
+          const isSelectedProject = group.key === selectedProject?.key;
+          const isProjectPinned = pinnedProjects.includes(group.key);
+          const projectHovered = hoveredProjectKey === group.key;
+          return (
+            <div key={group.key} style={{ paddingBottom: 2 }}>
+              <div
+                role="button"
+                tabIndex={0}
+                title={group.root}
+                draggable={isProjectPinned}
+                onDragStart={(e) => {
+                  if (!isProjectPinned) return;
+                  setDragProjectKey(group.key);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(e) => { if (dragProjectKey) e.preventDefault(); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (!dragProjectKey || dragProjectKey === group.key) return;
+                  const order = [...pinnedProjects];
+                  const from = order.indexOf(dragProjectKey);
+                  const to = order.indexOf(group.key);
+                  setDragProjectKey(null);
+                  if (from < 0 || to < 0) return;
+                  order.splice(from, 1);
+                  order.splice(to, 0, dragProjectKey);
+                  void reorderPinned("project", order);
+                }}
+                onDragEnd={() => setDragProjectKey(null)}
+                onMouseEnter={() => setHoveredProjectKey(group.key)}
+                onMouseLeave={() => setHoveredProjectKey((current) => (current === group.key ? null : current))}
+                onClick={() => { if (!isSelectedProject) setSelectedCwd(group.root); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    if (!isSelectedProject) setSelectedCwd(group.root);
+                  }
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "5px 10px",
+                  cursor: "pointer",
+                  color: isSelectedProject ? "var(--text)" : "var(--text-muted)",
+                  background: isSelectedProject || projectHovered ? "var(--bg-hover)" : "none",
+                }}
+              >
+                <button
+                  type="button"
+                  aria-label={isExpanded ? t("sidebar.showLess") : t("sidebar.showMore")}
+                  onClick={(e) => { e.stopPropagation(); toggleProjectExpanded(group.key); }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 16,
+                    height: 16,
+                    padding: 0,
+                    border: "none",
+                    background: "none",
+                    color: "var(--text-dim)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    transform: isExpanded ? "rotate(90deg)" : "none",
+                    transition: "transform 0.12s",
+                  }}
+                >
+                  <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 2l4 4-4 4" /></svg>
+                </button>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true" style={{ flexShrink: 0, color: "var(--text-dim)" }}><path d="M1.5 3h4l1.5 2h7.5v7.5h-13z" /></svg>
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 500 }}>
+                  {projectNames.get(group.key) ?? projectLabelOf(group.root)}
+                </span>
+                {activity && (activity.running > 0 || activity.unread > 0) && (
+                  <span
+                    title={t("sidebar.newActivity")}
+                    aria-label={t("sidebar.newActivity")}
+                    style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: "var(--accent)" }}
+                  />
+                )}
+                {projectHovered && (
+                  <>
+                    {group.families.length > 0 && (
+                      <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0 }}>{group.families.length}</span>
+                    )}
+                    <button
+                      type="button"
+                      title={isProjectPinned ? t("sidebar.unpin") : t("sidebar.pin")}
+                      aria-label={isProjectPinned ? t("sidebar.unpin") : t("sidebar.pin")}
+                      onClick={(e) => { e.stopPropagation(); toggleProjectPinned(group.key); }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 20,
+                        height: 20,
+                        padding: 0,
+                        border: "none",
+                        background: "none",
+                        color: isProjectPinned ? "var(--accent)" : "var(--text-dim)",
+                        cursor: "pointer",
+                        flexShrink: 0,
+                        borderRadius: 5,
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill={isProjectPinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      title={t("sidebar.newSessionTitle", { path: group.root })}
+                      aria-label={t("sidebar.newSessionTitle", { path: group.root })}
+                      onClick={(e) => { e.stopPropagation(); createNewSessionIn(group.root); }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 20,
+                        height: 20,
+                        padding: 0,
+                        border: "none",
+                        background: "none",
+                        color: "var(--text-dim)",
+                        cursor: "pointer",
+                        flexShrink: 0,
+                        borderRadius: 5,
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M6 2v8M2 6h8" /></svg>
+                    </button>
+                    <button
+                      type="button"
+                      title={t("sidebar.archiveProject")}
+                      aria-label={t("sidebar.archiveProject")}
+                      onClick={(e) => { e.stopPropagation(); void toggleProjectArchived(group.key); }}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, padding: 0, border: "none", background: "none", color: "var(--text-dim)", cursor: "pointer", flexShrink: 0, borderRadius: 5 }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="4" width="18" height="4" rx="1" />
+                        <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+                        <path d="M10 12h4" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      title={t("sidebar.deleteProject")}
+                      aria-label={t("sidebar.deleteProject")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        requestDeleteProject({
+                          key: group.key,
+                          root: group.root,
+                          name: projectNames.get(group.key) ?? projectLabelOf(group.root),
+                          familyRoots: projectRootSessionIds.get(group.key) ?? [],
+                        });
+                      }}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, padding: 0, border: "none", background: "none", color: "var(--text-dim)", cursor: "pointer", flexShrink: 0, borderRadius: 5 }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                        <path d="M10 11v6M14 11v6" />
+                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                      </svg>
+                    </button>
+                  </>
+                )}
+              </div>
+              {visibleFamilies.map((family) => {
+                const familySessions = [family.root, ...family.subagents];
+                const displaySession = family.latestModified === family.root.modified
+                  ? family.root
+                  : { ...family.root, modified: family.latestModified };
+                return (
+                  <div
+                    key={family.root.id}
+                    onFocus={() => setFocusedSessionId(family.root.id)}
+                    onBlur={() => setFocusedSessionId(null)}
+                  >
+                    <SessionItem
+                      session={displaySession}
+                      indent={1}
+                      isSelected={familySessions.some((session) => session.id === selectedSessionId)}
+                      isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
+                      isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
+                      isPinned={pinnedSessions.includes(family.root.id)}
+                      onTogglePin={() => toggleSessionPinned(family.root.id)}
+                      onToggleArchive={() => void toggleSessionArchived(family.root.id)}
+                      onClick={() => handleSelectSessionFromList(family.root)}
+                      onRenamed={loadSessions}
+                      onDeleted={(id) => {
+                        onSessionDeleted?.(id);
+                        loadSessions();
+                      }}
+                    />
+                  </div>
+                );
+              })}
+              {group.families.length === 0 && (
+                <button
+                  type="button"
+                  onClick={() => createNewSessionIn(group.root)}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "1px 10px 5px 24px",
+                    border: "none",
+                    background: "none",
+                    color: "var(--text-dim)",
+                    cursor: "pointer",
+                    fontSize: 11,
+                  }}
+                >
+                  {t("sidebar.noChats")}
+                </button>
+              )}
+              {isExpanded && canCollapse && (
+                <button
+                  type="button"
+                  onClick={() => toggleProjectShowAll(group.key)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "1px 10px 5px 24px",
+                    border: "none",
+                    background: "none",
+                    color: "var(--text-dim)",
+                    cursor: "pointer",
+                    fontSize: 11,
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; }}
+                >
+                  <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: showAll ? "rotate(180deg)" : "none" }}>
+                    <polyline points="2 3.5 5 6.5 8 3.5" />
+                  </svg>
+                  {showAll ? t("sidebar.showLess") : t("sidebar.showMoreCount", { count: hiddenCount })}
+                </button>
+              )}
+            </div>
+          );
+  };
 
   return (
     <div
@@ -2073,8 +2339,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {error}
           </div>
         )}
-        {/* Pinned conversations (drag to reorder) */}
-        {!loading && !error && pinnedSessionList.length > 0 && (
+        {/* 置顶：置顶的对话 + 置顶的项目（连同会话一起搬上来，Codex 式分带；
+            置顶的项目不再重复出现在下面的「项目」里） */}
+        {!loading && !error && (pinnedSessionList.length > 0 || pinnedProjectGroups.length > 0) && (
           <div style={{ borderBottom: "1px solid var(--border)" }}>
             <div style={{ padding: "6px 10px 2px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
               {t("sidebar.pinned")}
@@ -2113,6 +2380,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 />
               </div>
             ))}
+            {pinnedProjectGroups.map(renderProjectGroup)}
           </div>
         )}
         {/* Running conversations */}
@@ -2190,261 +2458,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {t("sidebar.noSessions")}
           </div>
         )}
-        {!loading && !error && projectGroups.map((group) => {
-          const isExpanded = expandedProjects[group.key] !== false;
-          const showAll = showAllProjects[group.key] === true;
-          const canCollapse = group.families.length > PROJECT_COLLAPSE_LIMIT;
-          const visibleFamilies = getVisibleProjectFamilies(group.families, { isExpanded, showAll });
-          const hiddenCount = group.families.length - visibleFamilies.length;
-          const activity = projectActivity.get(group.key);
-          const isSelectedProject = group.key === selectedProject?.key;
-          const isProjectPinned = pinnedProjects.includes(group.key);
-          const projectHovered = hoveredProjectKey === group.key;
-          return (
-            <div key={group.key} style={{ paddingBottom: 2 }}>
-              <div
-                role="button"
-                tabIndex={0}
-                title={group.root}
-                draggable={isProjectPinned}
-                onDragStart={(e) => {
-                  if (!isProjectPinned) return;
-                  setDragProjectKey(group.key);
-                  e.dataTransfer.effectAllowed = "move";
-                }}
-                onDragOver={(e) => { if (dragProjectKey) e.preventDefault(); }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (!dragProjectKey || dragProjectKey === group.key) return;
-                  const order = [...pinnedProjects];
-                  const from = order.indexOf(dragProjectKey);
-                  const to = order.indexOf(group.key);
-                  setDragProjectKey(null);
-                  if (from < 0 || to < 0) return;
-                  order.splice(from, 1);
-                  order.splice(to, 0, dragProjectKey);
-                  void reorderPinned("project", order);
-                }}
-                onDragEnd={() => setDragProjectKey(null)}
-                onMouseEnter={() => setHoveredProjectKey(group.key)}
-                onMouseLeave={() => setHoveredProjectKey((current) => (current === group.key ? null : current))}
-                onClick={() => { if (!isSelectedProject) setSelectedCwd(group.root); }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    if (!isSelectedProject) setSelectedCwd(group.root);
-                  }
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "5px 10px",
-                  cursor: "pointer",
-                  color: isSelectedProject ? "var(--text)" : "var(--text-muted)",
-                  background: isSelectedProject || projectHovered ? "var(--bg-hover)" : "none",
-                }}
-              >
-                <button
-                  type="button"
-                  aria-label={isExpanded ? t("sidebar.showLess") : t("sidebar.showMore")}
-                  onClick={(e) => { e.stopPropagation(); toggleProjectExpanded(group.key); }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    width: 16,
-                    height: 16,
-                    padding: 0,
-                    border: "none",
-                    background: "none",
-                    color: "var(--text-dim)",
-                    cursor: "pointer",
-                    flexShrink: 0,
-                    transform: isExpanded ? "rotate(90deg)" : "none",
-                    transition: "transform 0.12s",
-                  }}
-                >
-                  <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 2l4 4-4 4" /></svg>
-                </button>
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true" style={{ flexShrink: 0, color: "var(--text-dim)" }}><path d="M1.5 3h4l1.5 2h7.5v7.5h-13z" /></svg>
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 500 }}>
-                  {projectNames.get(group.key) ?? projectLabelOf(group.root)}
-                </span>
-                {activity && (activity.running > 0 || activity.unread > 0) && (
-                  <span
-                    title={t("sidebar.newActivity")}
-                    aria-label={t("sidebar.newActivity")}
-                    style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, background: "var(--accent)" }}
-                  />
-                )}
-                {projectHovered && (
-                  <>
-                    {group.families.length > 0 && (
-                      <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0 }}>{group.families.length}</span>
-                    )}
-                    <button
-                      type="button"
-                      title={isProjectPinned ? t("sidebar.unpin") : t("sidebar.pin")}
-                      aria-label={isProjectPinned ? t("sidebar.unpin") : t("sidebar.pin")}
-                      onClick={(e) => { e.stopPropagation(); toggleProjectPinned(group.key); }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        width: 20,
-                        height: 20,
-                        padding: 0,
-                        border: "none",
-                        background: "none",
-                        color: isProjectPinned ? "var(--accent)" : "var(--text-dim)",
-                        cursor: "pointer",
-                        flexShrink: 0,
-                        borderRadius: 5,
-                      }}
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill={isProjectPinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      title={t("sidebar.newSessionTitle", { path: group.root })}
-                      aria-label={t("sidebar.newSessionTitle", { path: group.root })}
-                      onClick={(e) => { e.stopPropagation(); createNewSessionIn(group.root); }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        width: 20,
-                        height: 20,
-                        padding: 0,
-                        border: "none",
-                        background: "none",
-                        color: "var(--text-dim)",
-                        cursor: "pointer",
-                        flexShrink: 0,
-                        borderRadius: 5,
-                      }}
-                    >
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M6 2v8M2 6h8" /></svg>
-                    </button>
-                    <button
-                      type="button"
-                      title={t("sidebar.archiveProject")}
-                      aria-label={t("sidebar.archiveProject")}
-                      onClick={(e) => { e.stopPropagation(); void toggleProjectArchived(group.key); }}
-                      style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, padding: 0, border: "none", background: "none", color: "var(--text-dim)", cursor: "pointer", flexShrink: 0, borderRadius: 5 }}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="4" width="18" height="4" rx="1" />
-                        <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-                        <path d="M10 12h4" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      title={t("sidebar.deleteProject")}
-                      aria-label={t("sidebar.deleteProject")}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        requestDeleteProject({
-                          key: group.key,
-                          root: group.root,
-                          name: projectNames.get(group.key) ?? projectLabelOf(group.root),
-                          familyRoots: projectRootSessionIds.get(group.key) ?? [],
-                        });
-                      }}
-                      style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, padding: 0, border: "none", background: "none", color: "var(--text-dim)", cursor: "pointer", flexShrink: 0, borderRadius: 5 }}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                        <path d="M10 11v6M14 11v6" />
-                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                      </svg>
-                    </button>
-                  </>
-                )}
-              </div>
-              {visibleFamilies.map((family) => {
-                const familySessions = [family.root, ...family.subagents];
-                const displaySession = family.latestModified === family.root.modified
-                  ? family.root
-                  : { ...family.root, modified: family.latestModified };
-                return (
-                  <div
-                    key={family.root.id}
-                    onFocus={() => setFocusedSessionId(family.root.id)}
-                    onBlur={() => setFocusedSessionId(null)}
-                  >
-                    <SessionItem
-                      session={displaySession}
-                      indent={1}
-                      isSelected={familySessions.some((session) => session.id === selectedSessionId)}
-                      isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
-                      isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
-                      isPinned={pinnedSessions.includes(family.root.id)}
-                      onTogglePin={() => toggleSessionPinned(family.root.id)}
-                      onToggleArchive={() => void toggleSessionArchived(family.root.id)}
-                      onClick={() => handleSelectSessionFromList(family.root)}
-                      onRenamed={loadSessions}
-                      onDeleted={(id) => {
-                        onSessionDeleted?.(id);
-                        loadSessions();
-                      }}
-                    />
-                  </div>
-                );
-              })}
-              {group.families.length === 0 && (
-                <button
-                  type="button"
-                  onClick={() => createNewSessionIn(group.root)}
-                  style={{
-                    display: "block",
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "1px 10px 5px 24px",
-                    border: "none",
-                    background: "none",
-                    color: "var(--text-dim)",
-                    cursor: "pointer",
-                    fontSize: 11,
-                  }}
-                >
-                  {t("sidebar.noChats")}
-                </button>
-              )}
-              {isExpanded && canCollapse && (
-                <button
-                  type="button"
-                  onClick={() => toggleProjectShowAll(group.key)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 4,
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "1px 10px 5px 24px",
-                    border: "none",
-                    background: "none",
-                    color: "var(--text-dim)",
-                    cursor: "pointer",
-                    fontSize: 11,
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; }}
-                >
-                  <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: showAll ? "rotate(180deg)" : "none" }}>
-                    <polyline points="2 3.5 5 6.5 8 3.5" />
-                  </svg>
-                  {showAll ? t("sidebar.showLess") : t("sidebar.showMoreCount", { count: hiddenCount })}
-                </button>
-              )}
-            </div>
-          );
-        })}
+        {!loading && !error && unpinnedProjectGroups.map(renderProjectGroup)}
+
         {/* 对话：不属于任何项目的独立会话。这里是「单纯新建对话」的总入口，
             与项目里的 + 分开，不需要任何文件夹作为上下文。 */}
         {!loading && !error && (
