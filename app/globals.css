@@ -1872,3 +1872,32 @@ span.token.table {
 .changes-row.is-open {
   background: var(--bg-selected);
 }
+
+/* ── Wallpaper ─────────────────────────────────────────────────────────────
+   Applied by hooks/useWallpaper.ts: <html data-wallpaper="on"> plus three
+   custom properties. With no wallpaper chosen none of this matches. */
+
+html[data-wallpaper="on"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: var(--wallpaper-image);
+  background-size: cover;
+  background-position: center;
+  filter: blur(var(--wallpaper-blur, 0px));
+  /* Blur pulls transparent edges in; grow the canvas so they stay covered. */
+  transform: scale(calc(1 + (var(--wallpaper-blur, 0px) / 100)));
+  pointer-events: none;
+}
+
+/* The picture shows through whichever surface uses these variables, so the
+   panels all turn glassy at once instead of one component at a time.
+   --wallpaper-strength (0..1) is the "let-through": 0.55 keeps text readable
+   by default and the slider pushes it either way. */
+html[data-wallpaper="on"] {
+  --bg: color-mix(in srgb, var(--bg) calc((1 - var(--wallpaper-strength, 0.55)) * 100%), transparent);
+  --bg-panel: color-mix(in srgb, var(--bg-panel) calc((1 - var(--wallpaper-strength, 0.55)) * 100%), transparent);
+  --bg-selected: color-mix(in srgb, var(--bg-selected) calc((1 - var(--wallpaper-strength, 0.55)) * 70%), transparent);
+  --bg-hover: color-mix(in srgb, var(--bg-hover) calc((1 - var(--wallpaper-strength, 0.55)) * 80%), transparent);
+}

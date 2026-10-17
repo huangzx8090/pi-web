@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useTheme } from "@/hooks/useTheme";
 import { pickNativeDirectory } from "@/lib/native-directory-picker";
+import { useWallpaper } from "@/hooks/useWallpaper";
 import { THEME_OPTIONS } from "@/lib/theme";
 import { ThemeIcon } from "./ThemeIcon";
 import {
@@ -91,6 +92,9 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
   const [projectlessRootSaving, setProjectlessRootSaving] = useState(false);
   const [projectlessRootError, setProjectlessRootError] = useState<string | null>(null);
   const [projectlessRootSaved, setProjectlessRootSaved] = useState(false);
+  const wallpaper = useWallpaper();
+  const [wallpaperBusy, setWallpaperBusy] = useState(false);
+  const [wallpaperError, setWallpaperError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -220,6 +224,31 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
     if (result.status === "picked") {
       setProjectlessRootDraft(result.cwd);
       void saveProjectlessRoot(result.cwd);
+    }
+  };
+
+  const chooseWallpaper = async () => {
+    setWallpaperBusy(true);
+    setWallpaperError(null);
+    try {
+      const picked = await fetch("/api/wallpaper/pick", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: t("settings.wallpaperChoosePrompt") }),
+      }).then(async (response) => response.json() as { canceled?: boolean; sourcePath?: string; error?: string });
+      if (picked.canceled || !picked.sourcePath) return;
+      const response = await fetch("/api/wallpaper", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourcePath: picked.sourcePath }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+      wallpaper.update({ enabled: true, version: Date.now() });
+    } catch (cause) {
+      setWallpaperError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setWallpaperBusy(false);
     }
   };
 
@@ -472,6 +501,50 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
         </div>
         <p className="settings-general-description">{t("settings.projectlessRootDescription")}</p>
         {projectlessRootError && <p role="alert" className="settings-general-error">{projectlessRootError}</p>}
+      </section>
+
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t("settings.wallpaper")}</h3>
+        <div className="settings-wallpaper-preview-row">
+          <div className="settings-wallpaper-preview" data-empty={!wallpaper.enabled || undefined}>
+            {wallpaper.enabled
+              // eslint-disable-next-line @next/next/no-img-element -- served by /api/wallpaper, not the image optimizer
+              ? <img src={`/api/wallpaper?v=${wallpaper.version}`} alt="" />
+              : <span>{t("settings.wallpaperNone")}</span>}
+          </div>
+          <div className="settings-wallpaper-controls">
+            <div className="settings-wallpaper-slider">
+              <label htmlFor="wallpaper-strength">{t("settings.wallpaperStrength")}</label>
+              <input
+                id="wallpaper-strength"
+                type="range" min={0.2} max={0.9} step={0.05}
+                value={wallpaper.strength}
+                onChange={(event) => wallpaper.update({ strength: Number(event.target.value) })}
+              />
+            </div>
+            <div className="settings-wallpaper-slider">
+              <label htmlFor="wallpaper-blur">{t("settings.wallpaperBlur")}</label>
+              <input
+                id="wallpaper-blur"
+                type="range" min={0} max={20} step={1}
+                value={wallpaper.blur}
+                onChange={(event) => wallpaper.update({ blur: Number(event.target.value) })}
+              />
+            </div>
+          </div>
+        </div>
+        <div className="settings-wallpaper-actions">
+          <button type="button" onClick={() => void chooseWallpaper()} disabled={wallpaperBusy} className="settings-general-btn">
+            {t("settings.wallpaperChoose")}
+          </button>
+          {wallpaper.enabled && (
+            <button type="button" onClick={() => wallpaper.clear()} className="settings-general-btn">
+              {t("settings.wallpaperClear")}
+            </button>
+          )}
+        </div>
+        <p className="settings-general-description">{t("settings.wallpaperDescription")}</p>
+        {wallpaperError && <p role="alert" className="settings-general-error">{wallpaperError}</p>}
       </section>
 
       {shellSettings?.isWindows && (

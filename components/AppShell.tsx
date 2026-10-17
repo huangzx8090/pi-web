@@ -24,6 +24,7 @@ import { AgentSessionPanel } from "./AgentSessionPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { newTerminalTab, restoreTerminalTabs, TERMINAL_TABS_KEY, type TerminalTab } from "./terminal-tab-state";
 import { useTheme } from "@/hooks/useTheme";
+import { useWallpaperBoot } from "@/hooks/useWallpaper";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile, useIsNarrowMobile } from "@/hooks/useIsMobile";
 import { useViewportHeight } from "@/hooks/useViewportHeight";
@@ -102,6 +103,8 @@ export function AppShell() {
   const [initialNavigation, setInitialNavigation] = useState(() => getInitialNavigation(searchParams));
   // Keep the system-theme subscription mounted for the lifetime of the app.
   useTheme();
+  // Applies the saved wallpaper (html[data-wallpaper]) on every load.
+  useWallpaperBoot();
   const { locale, t: translate } = useI18n();
   const isMobile = useIsMobile();
   const isNarrowMobile = useIsNarrowMobile();
