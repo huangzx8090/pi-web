@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useTheme } from "@/hooks/useTheme";
+import { pickNativeDirectory } from "@/lib/native-directory-picker";
 import { THEME_OPTIONS } from "@/lib/theme";
 import { ThemeIcon } from "./ThemeIcon";
 import {
@@ -85,6 +86,11 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
   const [defaultModelError, setDefaultModelError] = useState<string | null>(null);
   const [titleModelSaving, setTitleModelSaving] = useState(false);
   const [titleModelError, setTitleModelError] = useState<string | null>(null);
+  const [projectlessRoot, setProjectlessRoot] = useState<string>("");
+  const [projectlessRootDraft, setProjectlessRootDraft] = useState<string>("");
+  const [projectlessRootSaving, setProjectlessRootSaving] = useState(false);
+  const [projectlessRootError, setProjectlessRootError] = useState<string | null>(null);
+  const [projectlessRootSaved, setProjectlessRootSaved] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,6 +172,56 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
       .then((data: { enabled?: boolean } | null) => setWebAuthEnabled(data?.enabled === true))
       .catch(() => {});
   }, []);
+
+  // 只有「不属于任何项目」的对话用到这个目录；每个对话在它下面各占一个文件夹
+  // （结构同 Codex：<root>/<日期>/<对话目录>）。
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/default-cwd")
+      .then(async (response) => {
+        const data = await response.json() as { root?: string; error?: string };
+        if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+        if (cancelled || typeof data.root !== "string") return;
+        setProjectlessRoot(data.root);
+        setProjectlessRootDraft(data.root);
+      })
+      .catch((cause) => {
+        if (!cancelled) setProjectlessRootError(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const saveProjectlessRoot = async (value: string) => {
+    setProjectlessRootSaving(true);
+    setProjectlessRootError(null);
+    try {
+      const response = await fetch("/api/default-cwd", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ root: value }),
+      });
+      const data = await response.json() as { root?: string; error?: string };
+      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+      if (typeof data.root === "string") {
+        setProjectlessRoot(data.root);
+        setProjectlessRootDraft(data.root);
+      }
+      setProjectlessRootSaved(true);
+      window.setTimeout(() => setProjectlessRootSaved(false), 2000);
+    } catch (cause) {
+      setProjectlessRootError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setProjectlessRootSaving(false);
+    }
+  };
+
+  const pickProjectlessRoot = async () => {
+    const result = await pickNativeDirectory(t("settings.projectlessRootChoose"));
+    if (result.status === "picked") {
+      setProjectlessRootDraft(result.cwd);
+      void saveProjectlessRoot(result.cwd);
+    }
+  };
 
   const logOut = async () => {
     setLoggingOut(true);
@@ -389,6 +445,33 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
           />
         </div>
         {titleModelError && <p role="alert" className="settings-general-error">{titleModelError}</p>}
+      </section>
+
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t("settings.projectlessRoot")}</h3>
+        <div className="settings-projectless-row">
+          <input
+            aria-label={t("settings.projectlessRoot")}
+            value={projectlessRootDraft}
+            placeholder={projectlessRoot}
+            onChange={(event) => setProjectlessRootDraft(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") void saveProjectlessRoot(projectlessRootDraft); }}
+            className="settings-projectless-input"
+          />
+          <button type="button" onClick={() => void pickProjectlessRoot()} className="settings-general-btn">
+            {t("settings.projectlessRootBrowse")}
+          </button>
+          <button
+            type="button"
+            onClick={() => void saveProjectlessRoot(projectlessRootDraft)}
+            disabled={projectlessRootSaving || !projectlessRootDraft.trim()}
+            className="settings-general-btn"
+          >
+            {projectlessRootSaved ? t("settings.projectlessRootSaved") : t("settings.projectlessRootSave")}
+          </button>
+        </div>
+        <p className="settings-general-description">{t("settings.projectlessRootDescription")}</p>
+        {projectlessRootError && <p role="alert" className="settings-general-error">{projectlessRootError}</p>}
       </section>
 
       {shellSettings?.isWindows && (

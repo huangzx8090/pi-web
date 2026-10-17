@@ -1141,6 +1141,51 @@
   max-width: 420px;
 }
 
+.settings-general-btn {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+
+.settings-general-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: rgba(37, 99, 235, 0.35);
+  background: var(--bg-hover);
+}
+
+.settings-general-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.settings-projectless-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.settings-projectless-input {
+  flex: 1 1 260px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
 .settings-general-error {
   margin: 8px 0 0;
   color: #ef4444;

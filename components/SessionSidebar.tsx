@@ -42,10 +42,12 @@ function projectLabelOf(root: string): string {
 }
 
 /**
- * 「新建」默认落到的目录（对话级，不属于任何项目）：现在的固定 `~/pi-chats`，
+ * 对话级目录（不属于任何项目）：现在的 `~/pi-chats/<每个对话自己的目录>`，
  * 以及旧版本按日期建的 `~/pi-cwd-YYYYMMDD`。
  */
-const SCRATCH_CWD_RE = /\/pi-(?:cwd-\d{8}|chats)$/;
+const SCRATCH_CWD_RE = /\/pi-(?:cwd-\d{8}|chats(?:\/[^/]+)?)$/;
+/** Codex 式的对话目录：~/Documents/PiWeb/<日期>/<每个对话一个目录>。 */
+const SCRATCH_ROOT_SEGMENT = "/Documents/PiWeb";
 
 /**
  * Rows to render for one project. Families are already sorted most-recent-
@@ -1225,6 +1227,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const isProjectlessCwd = useCallback((cwd: string): boolean => {
     if (!cwd) return true;
     if (SCRATCH_CWD_RE.test(cwd)) return true;
+    if (homeDir) {
+      const root = `${homeDir.replace(/\/+$/, "")}${SCRATCH_ROOT_SEGMENT}`;
+      if (cwd === root || cwd.startsWith(`${root}/`)) return true;
+    }
     if (homeDir && cwd.replace(/\/+$/, "") === homeDir.replace(/\/+$/, "")) return true;
     if (cwd === "/tmp" || cwd === "/private/tmp") return true;
     return false;

@@ -46,6 +46,7 @@ export async function getAllowedFileRoots(): Promise<Set<string>> {
   // working.
   try {
     roots.add(normalizeSlashes(path.join(homedir(), "pi-chats")));
+    roots.add(normalizeSlashes(path.join(homedir(), "Documents", "PiWeb")));
     for (const name of readdirSync(homedir())) {
       if (/^pi-cwd-\d{8}$/.test(name)) {
         roots.add(normalizeSlashes(path.join(homedir(), name)));
