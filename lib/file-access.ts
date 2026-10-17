@@ -41,8 +41,11 @@ export async function getAllowedFileRoots(): Promise<Set<string>> {
     // ignore an unreadable registry
   }
 
-  // Also allow ~/pi-cwd-* directories created by the default-cwd endpoint.
+  // The scratch workspace conversations fall back to (~/pi-chats), plus the
+  // dated ~/pi-cwd-* folders older versions created, so old sessions keep
+  // working.
   try {
+    roots.add(normalizeSlashes(path.join(homedir(), "pi-chats")));
     for (const name of readdirSync(homedir())) {
       if (/^pi-cwd-\d{8}$/.test(name)) {
         roots.add(normalizeSlashes(path.join(homedir(), name)));

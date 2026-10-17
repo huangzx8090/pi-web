@@ -283,6 +283,7 @@ export const zhCNLocale: LocalePlugin = {
     "sidebar.collapseSubagents": "折叠子智能体",
     "sidebar.projects": "项目",
     "sidebar.recent": "最近",
+    "sidebar.chats": "对话",
     "sidebar.showMore": "展开显示",
     "sidebar.showMoreCount": "展开其余 {count} 个",
     "sidebar.showLess": "收起",

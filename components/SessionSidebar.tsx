@@ -41,8 +41,11 @@ function projectLabelOf(root: string): string {
   return parts.length > 0 ? parts[parts.length - 1] : root;
 }
 
-/** 「新建」默认落到的目录（对话级，不属于任何项目）。 */
-const SCRATCH_CWD_RE = /\/pi-cwd-\d{8}$/;
+/**
+ * 「新建」默认落到的目录（对话级，不属于任何项目）：现在的固定 `~/pi-chats`，
+ * 以及旧版本按日期建的 `~/pi-cwd-YYYYMMDD`。
+ */
+const SCRATCH_CWD_RE = /\/pi-(?:cwd-\d{8}|chats)$/;
 
 /**
  * Rows to render for one project. Families are already sorted most-recent-
@@ -2442,11 +2445,46 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </div>
           );
         })}
-        {/* Recent conversations (conversation-level) */}
-        {!loading && !error && recentSessionList.length > 0 && (
+        {/* 对话：不属于任何项目的独立会话。这里是「单纯新建对话」的总入口，
+            与项目里的 + 分开，不需要任何文件夹作为上下文。 */}
+        {!loading && !error && (
           <div style={{ borderTop: "1px solid var(--border)", marginTop: 4 }}>
-            <div style={{ padding: "6px 10px 2px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
-              {t("sidebar.recent")}
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "6px 6px 2px 10px",
+            }}>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-dim)" }}>
+                {t("sidebar.chats")}
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleNewSession()}
+                title={t("sidebar.newChat")}
+                aria-label={t("sidebar.newChat")}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 22, height: 22, padding: 0,
+                  background: "transparent", border: "1px solid var(--border)",
+                  borderRadius: 5, color: "var(--text-dim)", cursor: "pointer",
+                  flexShrink: 0, transition: "color 0.12s, border-color 0.12s, background 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "var(--accent)";
+                  e.currentTarget.style.borderColor = "rgba(37,99,235,0.35)";
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "var(--text-dim)";
+                  e.currentTarget.style.borderColor = "var(--border)";
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                  <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
             </div>
             {recentSessionList.map((s) => (
               <SessionItem

@@ -283,6 +283,7 @@ export const zhTWLocale: LocalePlugin = {
     "sidebar.collapseSubagents": "摺疊子代理",
     "sidebar.projects": "專案",
     "sidebar.recent": "最近",
+    "sidebar.chats": "對話",
     "sidebar.showMore": "展開顯示",
     "sidebar.showMoreCount": "展開其餘 {count} 個",
     "sidebar.showLess": "收合",

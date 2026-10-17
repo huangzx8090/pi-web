@@ -283,6 +283,7 @@ export const enLocale: LocalePlugin = {
     "sidebar.collapseSubagents": "Collapse subagents",
     "sidebar.projects": "Projects",
     "sidebar.recent": "Recent",
+    "sidebar.chats": "Chats",
     "sidebar.showMore": "Show more",
     "sidebar.showMoreCount": "Show {count} more",
     "sidebar.showLess": "Show less",

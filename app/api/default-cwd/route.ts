@@ -5,14 +5,22 @@ import { join } from "path";
 import { allowFileRoot } from "@/lib/file-access";
 
 // POST /api/default-cwd
-// Creates ~/pi-cwd-<YYYYMMDD> if it doesn't exist and returns the path.
+// Returns the one scratch workspace used by conversations that belong to no
+// project (`~/pi-chats`), creating it on first use.
+//
+// It used to be `~/pi-cwd-<YYYYMMDD>`: one folder per day, created behind the
+// user's back, so the home directory filled up with pi-cwd-* entries and each
+// day's chats became their own bucket. Codex and Claude Code both tie a
+// conversation to a directory but reuse a fixed one, which is what this does.
+// Old `~/pi-cwd-*` folders keep working (lib/file-access.ts still allows them
+// and the sidebar still files their sessions under 「对话」).
+const SCRATCH_DIR = join(homedir(), "pi-chats");
+
 export async function POST() {
   try {
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const dir = join(homedir(), `pi-cwd-${date}`);
-    mkdirSync(dir, { recursive: true });
-    allowFileRoot(dir);
-    return NextResponse.json({ cwd: dir });
+    mkdirSync(SCRATCH_DIR, { recursive: true });
+    allowFileRoot(SCRATCH_DIR);
+    return NextResponse.json({ cwd: SCRATCH_DIR });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
