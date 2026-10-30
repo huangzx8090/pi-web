@@ -42,6 +42,7 @@ import { createSubagentController } from "./subagent-runtime";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import { resolveShellTools } from "./powershell-settings";
 import { CHAT_ONLY_RESOURCE_LOADER_OPTIONS, contextFilesSystemPrompt } from "./chat-only";
+import { createExactSystemPromptExtension } from "./exact-system-prompt";
 import {
   appendSessionToolSelection,
   readSessionToolSelection,
@@ -234,6 +235,7 @@ export class AgentSessionWrapper {
   private activeMutatingCommands = 0;
   private sessionReplacement: "fork" | "clone" | null = null;
   private agentRunNeedsCompletion = false;
+  private lastRunAborted = false;
   private promptAdmissionTail: Promise<void> = Promise.resolve();
   private extensionsBound = false;
   private extensionBindingPromise: Promise<void> | null = null;
@@ -258,8 +260,6 @@ export class AgentSessionWrapper {
     this.chatOnly = options.chatOnly ?? false;
     this.onAgentRunComplete = options.onAgentRunComplete;
     this.suppressCompletionNotifications = options.suppressCompletionNotifications ?? false;
-    this.installExactSystemPromptContinuation();
-    this.applyExactSystemPrompt();
   }
 
   get sessionId(): string {
@@ -315,7 +315,11 @@ export class AgentSessionWrapper {
 
   start(): void {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
-      if (event.type === "agent_start") this.agentRunNeedsCompletion = true;
+      if (event.type === "agent_start") {
+        this.agentRunNeedsCompletion = true;
+        this.lastRunAborted = false;
+      }
+      if (event.type === "agent_settled") this.lastRunAborted = event.aborted === true;
       if (event.type === "agent_end") {
         invalidateSessionListCache();
       }
@@ -337,7 +341,7 @@ export class AgentSessionWrapper {
   private notifyAgentRunCompleteIfIdle(): void {
     if (!this.agentRunNeedsCompletion || this.isRunning()) return;
     this.agentRunNeedsCompletion = false;
-    if (this.suppressCompletionNotifications) return;
+    if (this.suppressCompletionNotifications || this.lastRunAborted) return;
     try {
       this.onAgentRunComplete?.(this.sessionId);
     } catch (error) {
@@ -356,10 +360,7 @@ export class AgentSessionWrapper {
   }
 
   private ensureExtensionsBound(): Promise<void> {
-    if (this.extensionsBound) {
-      this.applyExactSystemPrompt();
-      return Promise.resolve();
-    }
+    if (this.extensionsBound) return Promise.resolve();
     if (this.extensionBindingPromise) return this.extensionBindingPromise;
 
     this.extensionBindingError = null;
@@ -396,7 +397,6 @@ export class AgentSessionWrapper {
         this.inner.extensionRunner.setUIContext?.(uiContext, "rpc");
       }
       this.extensionsBound = true;
-      this.applyExactSystemPrompt();
       console.log(`[pi-web] session_start dispatched to extensions for session ${this.inner.sessionId}`);
     })().catch((err) => {
       this.extensionBindingError = err;
@@ -435,29 +435,8 @@ export class AgentSessionWrapper {
     }
   }
 
-  private applyExactSystemPrompt(): void {
-    if (!this.exactSystemPrompt || !this.inner.agent.state) return;
-    this.inner.agent.state.systemPrompt = this.exactSystemPrompt();
-  }
-
-  private installExactSystemPromptContinuation(): void {
-    if (!this.exactSystemPrompt) return;
-    const previous = this.inner.agent.prepareNextTurnWithContext;
-    this.inner.agent.prepareNextTurnWithContext = async (turn, signal) => {
-      const prepared = await previous?.(turn, signal);
-      return {
-        ...prepared,
-        context: {
-          ...(prepared?.context ?? turn.context),
-          systemPrompt: this.exactSystemPrompt!(),
-        },
-      };
-    };
-  }
-
   setActiveToolSelection(toolNames: string[]): void {
     this.inner.setActiveToolsByName(withExtensionTools(this.inner, toolNames));
-    this.applyExactSystemPrompt();
   }
 
   private emit(event: AgentEvent): void {
@@ -617,7 +596,6 @@ export class AgentSessionWrapper {
           const preflight = new Promise<void>((resolve, reject) => {
             acceptPreflight = () => {
               preflightAccepted = true;
-              this.agentRunNeedsCompletion = true;
               if (preflightSettled) return;
               preflightSettled = true;
               resolve();
@@ -637,6 +615,8 @@ export class AgentSessionWrapper {
           };
 
           this.pendingPromptCount += 1;
+          // 接收命令不等于启动任务；只由 agent_start 决定是否需要完成通知。
+          if (!streamingBehavior) this.lastRunAborted = false;
           let prompt: Promise<void>;
           try {
             prompt = this.inner.prompt(command.message as string, {
@@ -645,12 +625,7 @@ export class AgentSessionWrapper {
               source: "rpc",
               // Match pi's RPC contract: acknowledge only after synchronous prompt
               // validation and extension preflight have accepted the submission.
-              preflightResult: (success) => {
-                if (success) {
-                  this.applyExactSystemPrompt();
-                  acceptPreflight();
-                }
-              },
+              preflightResult: () => acceptPreflight(),
             });
           } catch (error) {
             finishPrompt();
@@ -662,7 +637,7 @@ export class AgentSessionWrapper {
             // the internal callback. This waits for the run, but never acks early.
             acceptPreflight();
             finishPrompt();
-            if (!streamingBehavior) this.emit({ type: "prompt_done" });
+            if (!streamingBehavior) this.emit({ type: "prompt_done", ...(this.lastRunAborted ? { aborted: true } : {}) });
           }, (error) => {
             rejectPreflight(error);
             finishPrompt();
@@ -674,7 +649,7 @@ export class AgentSessionWrapper {
                 type: "prompt_error",
                 errorMessage: error instanceof Error ? error.message : String(error),
               });
-              if (!streamingBehavior) this.emit({ type: "prompt_done" });
+              if (!streamingBehavior) this.emit({ type: "prompt_done", ...(this.lastRunAborted ? { aborted: true } : {}) });
             }
           }).catch((error) => {
             console.error(
@@ -723,7 +698,9 @@ export class AgentSessionWrapper {
           contextUsage: contextUsage
             ? { percent: contextUsage.percent, contextWindow: contextUsage.contextWindow, tokens: contextUsage.tokens }
             : null,
-          systemPrompt: this.inner.agent.state?.systemPrompt ?? "",
+          // An exact prompt is projected onto each run by the inline extension;
+          // the SDK state only shows Pi's structured sections.
+          systemPrompt: this.exactSystemPrompt?.() ?? this.inner.systemPrompt ?? this.inner.agent.state?.systemPrompt ?? "",
           thinkingLevel: this.inner.agent.state?.thinkingLevel ?? "off",
           extensionStatuses: this.getExtensionStatuses(),
           extensionWidgets: this.getExtensionWidgets(),
@@ -981,7 +958,6 @@ export class AgentSessionWrapper {
         if (typeof this.inner.bindExtensions !== "function") {
           this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
         }
-        this.applyExactSystemPrompt();
         invalidateModelsCache();
         return { success: true };
       }
@@ -1672,7 +1648,6 @@ export class AgentSessionWrapper {
             this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
           },
         });
-        this.applyExactSystemPrompt();
       },
     };
   }
@@ -1717,7 +1692,8 @@ function registerRpcWrapper(wrapper: AgentSessionWrapper): void {
   wrapper.onDestroy(() => registry.delete(sessionId));
   registry.set(sessionId, wrapper);
   wrapper.start();
-  if (!wrapper.isChatOnly()) wrapper.beginExtensionBinding();
+  // Chat-only 仍需绑定内部提示词桥接；第三方扩展已由资源加载选项禁用。
+  wrapper.beginExtensionBinding();
 }
 
 const SUBAGENT_CONTROLLER = createSubagentController({
@@ -2048,6 +2024,13 @@ export async function startRpcSession(
         ? undefined
         : projectTrustReloadOptions(sessionCwd, agentDir);
     const settingsManager = SettingsManager.create(sessionCwd, agentDir);
+    // Chat-only sessions and subagents that replace Pi's prompt send an exact
+    // system prompt. The prompt is resolved at prompt time through this inline
+    // extension: it may read the session's context files, which exist only
+    // after the session is created, so the getter is filled in below.
+    const exactSystemPromptRef: { current?: () => string } = {};
+    const exactSystemPromptExtension = createExactSystemPromptExtension(() => exactSystemPromptRef.current?.());
+    const usesExactSystemPrompt = chatOnly || subagentResources?.exactSystemPrompt !== undefined;
     const services = await createAgentSessionServices({
       cwd: sessionCwd,
       agentDir,
@@ -2066,9 +2049,10 @@ export async function startRpcSession(
                 }
               : {}),
             appendSystemPrompt: subagentResources.appendSystemPrompt,
+            ...(usesExactSystemPrompt ? { extensionFactories: [exactSystemPromptExtension] } : {}),
           }
         : chatOnly
-          ? CHAT_ONLY_RESOURCE_LOADER_OPTIONS
+          ? { ...CHAT_ONLY_RESOURCE_LOADER_OPTIONS, extensionFactories: [exactSystemPromptExtension] }
         : {
             extensionFactories: [
               createProjectCommandBashExtension({
@@ -2098,7 +2082,8 @@ export async function startRpcSession(
     const defaultProvider = services.settingsManager.getDefaultProvider();
     const defaultModelId = services.settingsManager.getDefaultModel();
     const branch = sessionManager.getBranch();
-    const hasExistingMessages = branch.some((entry) => entry.type === "message");
+    // System messages carry the prompt and tool loadout, not a conversation.
+    const hasExistingMessages = branch.some((entry) => entry.type === "message" && entry.message.role !== "system");
     const savedModel = hasExistingMessages
       ? getLatestModelChange(branch as unknown as SessionEntry[])
       : null;
@@ -2155,6 +2140,7 @@ export async function startRpcSession(
           ? () => subagentResources.appendSystemPrompt[0] ?? ""
           : () => contextFilesSystemPrompt(inner.resourceLoader.getAgentsFiles().agentsFiles)
         : undefined;
+    exactSystemPromptRef.current = exactSystemPrompt;
     const wrapper = new AgentSessionWrapper(inner, {
       exactSystemPrompt,
       chatOnly,

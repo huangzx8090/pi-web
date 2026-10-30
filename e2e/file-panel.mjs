@@ -7,6 +7,34 @@ export const filePanelFixture = `<!doctype html><html><body style="margin:20px;m
 <script>window.previewInstance = Math.random();</script></body></html>`;
 
 export async function checkFilePanel(page, filePath) {
+  // 定制版把文件移到了主区域标签页；按现有布局验证，保留旧侧栏布局的检查。
+  const editor = page.getByTestId("editor-content");
+  if (await editor.count()) {
+    const showExplorer = page.getByRole("button", { name: "Show file explorer", exact: true });
+    if (await showExplorer.isVisible()) await showExplorer.click();
+    await page.getByTitle(filePath, { exact: true }).click();
+    const tab = page.getByRole("tab", { name: "preview.html", exact: true });
+    assert.equal(await tab.getAttribute("aria-selected"), "true");
+    const iframe = editor.locator("iframe");
+    await iframe.waitFor();
+    const frame = await (await iframe.elementHandle()).contentFrame();
+    await frame.locator("#notes").fill("Keep this note");
+    await frame.locator("#filter").selectOption({ label: "Pending" });
+    const instance = await frame.evaluate(() => window.previewInstance);
+    await page.getByRole("button", { name: "Hide file explorer", exact: true }).click();
+    assert.equal(await frame.evaluate(() => window.previewInstance), instance);
+    assert.equal(await frame.locator("#notes").inputValue(), "Keep this note");
+    assert.equal(await frame.locator("#filter").inputValue(), "Pending");
+    await page.getByRole("tab", { name: "Chat", exact: true }).click();
+    await page.locator(".markdown-code-block pre").waitFor();
+    await tab.click();
+    await editor.frameLocator("iframe").getByText("HTML preview state must survive layout changes.", { exact: true }).waitFor();
+    await tab.getByRole("button").click();
+    await tab.waitFor({ state: "detached" });
+    await page.locator(".markdown-code-block pre").waitFor();
+    console.log(`PASS: main file tabs, HTML preview, explorer collapse, and chat switching at ${page.viewportSize().width}px`);
+    return;
+  }
   const showSidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
   if (await showSidebar.isVisible()) await showSidebar.click();
   await page.locator(`[title="${filePath}"]`).click();

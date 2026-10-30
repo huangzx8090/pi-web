@@ -5,7 +5,7 @@
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { writePrivateFileAtomicSync } from "./atomic-file";
@@ -325,11 +325,13 @@ export async function listSessionsIncremental(): Promise<ScannedSessionInfo[]> {
 
 	const changed: Array<{ filePath: string; fp: Fingerprint; resultIndex: number }> = [];
 	const results: (ScannedSessionInfo | null)[] = new Array(files.length).fill(null);
+	const mtimes: number[] = new Array(files.length).fill(Number.NEGATIVE_INFINITY);
 	for (const [resultIndex, { filePath, fp }] of fingerprints.entries()) {
 		if (!fp) {
 			index.delete(filePath);
 			continue;
 		}
+		mtimes[resultIndex] = fp.mtimeMs;
 		const cached = index.get(filePath);
 		if (
 			cached &&
@@ -355,9 +357,18 @@ export async function listSessionsIncremental(): Promise<ScannedSessionInfo[]> {
 	if (changed.length > 0 || stale.length > 0) queueIndexPersist();
 
 	// Preserve catalogue order for timestamp ties, independently of cache hits
-	// and the order in which concurrent file reads complete.
-	return results.filter((info) => info !== null)
-		.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+	// and the order in which concurrent file reads complete. Since pi 0.86 the
+	// SDK reads files newest-mtime first (then reverse filename) so resume can
+	// show results progressively, and its stable sort keeps that order for
+	// sessions with equal activity time.
+	return results
+		.flatMap((info, resultIndex) => (info ? [{ info, mtimeMs: mtimes[resultIndex] }] : []))
+		.sort((a, b) =>
+			b.info.modified.getTime() - a.info.modified.getTime()
+			|| b.mtimeMs - a.mtimeMs
+			|| basename(b.info.path).localeCompare(basename(a.info.path)),
+		)
+		.map(({ info }) => info);
 }
 
 /** Test seam: drop all in-memory index state. */
