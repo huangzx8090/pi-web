@@ -16,6 +16,18 @@ export function registerAbortHandler(handler: (() => void) | null): void {
   globalAbortHandler = handler;
 }
 
+export function isNewSessionShortcut(event: {
+  key: string;
+  code?: string | null;
+  ctrlKey: boolean;
+  altKey: boolean;
+}): boolean {
+  if (!event.ctrlKey || !event.altKey) return false;
+  if (event.key.toLowerCase() === "n") return true;
+  // macOS Option+N 会产生 Dead key；其他字符仍交给输入法，避免吞掉 AltGr 输入。
+  return event.key === "Dead" && event.code === "KeyN";
+}
+
 // ---------------------------------------------------------------------------
 // Hook: global keyboard shortcuts
 // ---------------------------------------------------------------------------
@@ -60,7 +72,7 @@ export function useGlobalKeyboardShortcuts(
       }
 
       // ---- Ctrl+Alt+N: new session ----
-      if (e.key === "n" && e.ctrlKey && e.altKey) {
+      if (isNewSessionShortcut(e)) {
         if (!activeCwd || !onNewSession) return;
         e.preventDefault();
         onNewSession(activeCwd);

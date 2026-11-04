@@ -199,3 +199,13 @@ test("a locked navigator keeps the tree readable but offers no branch to switch 
   assert.equal((locked.match(/cursor:pointer/g) ?? []).length, 1);
   assert.equal((locked.match(/cursor:default/g) ?? []).length, 2);
 });
+
+test("compressChain never labels a branch with a transcript system message", () => {
+  // Pi >= 0.86 roots new sessions at a system message holding the prompt.
+  const system = { type: "message", id: "sys", parentId: null, timestamp: "t", message: { role: "system", content: "", sections: { preamble: "You are an expert coding assistant." } } };
+  const chain = node(system, [node(msg("u1", "user", "原始问题"), [node(msg("a1", "assistant", "答"))])]);
+  const { labelEntry, node: rep, skipped } = compressChain(chain);
+  assert.equal(labelEntry.id, "u1");
+  assert.equal(rep.entry.id, "a1");
+  assert.equal(skipped, 2);
+});

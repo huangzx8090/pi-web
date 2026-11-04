@@ -38,6 +38,8 @@ function previewForEntry(entry: ProjectableEntry): BranchPreview | undefined {
   if (entry.type !== "message" || !isRecord(entry.message) || typeof entry.message.role !== "string") {
     return undefined;
   }
+  // Transcript system messages (Pi >= 0.86) carry the prompt text, not a turn.
+  if (entry.message.role === "system") return undefined;
 
   const content = entry.message.content;
   let text = "";

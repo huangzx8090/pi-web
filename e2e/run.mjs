@@ -338,7 +338,7 @@ try {
       await page.screenshot({ path: join(artifacts, "compaction-minimap.png") });
 
       const selectSession = async (title, entryId) => {
-        await page.locator(`[title="${title}"]`).click();
+        await page.getByText(title, { exact: true }).first().click();
         await page.locator(`[data-entry-id="${entryId}"]:not([data-message-role])`).waitFor({ state: "visible" });
       };
       const readingOffset = (target) => target.evaluate((element) => (
@@ -381,7 +381,7 @@ try {
       await page.route(agentRoute, (route) => route.fulfill({ json: {} }));
       try {
         const pendingHistory = page.waitForRequest((request) => request.url().includes(`/api/sessions/${LONG}/context?`) && new URL(request.url()).searchParams.has("before"));
-        await page.locator(`[title="${text(0)}"]`).click();
+        await page.getByText(text(0), { exact: true }).first().click();
         await pendingHistory;
         await page.getByRole("button", { name: "Branches", exact: true }).click();
         await page.getByText("E2E alternate history branch", { exact: true }).click();
